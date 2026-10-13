@@ -17,5 +17,5 @@ async def get_frontend_config() -> dict:
     return {
         "apiBaseUrl": os.getenv("API_BASE_URL", ""),
         "appName": os.getenv("APP_NAME", "MHTI"),
-        "version": os.getenv("APP_VERSION", "2.0.0"),
+        "version": os.getenv("APP_VERSION", "1.0.0"),
     }

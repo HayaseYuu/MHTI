@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, toRaw } from 'vue'
 import { NButton, NCard, NIcon, NModal, NSpace, NTabs, NTabPane } from 'naive-ui'
 import { CloseOutline } from '@vicons/ionicons5'
 import type { AdvancedSettingsForm, ManualJobAdvancedSettings } from '@/modules/scrape/types'
@@ -11,6 +11,8 @@ import MetadataTab from '@/modules/scrape/components/advanced/MetadataTab.vue'
 
 const props = defineProps<{
   show: boolean
+  r18: boolean
+  initialSettings?: ManualJobAdvancedSettings | null
 }>()
 
 const emit = defineEmits<{
@@ -50,6 +52,8 @@ const formData = ref<AdvancedSettingsForm>({
   nfo_enabled: true,
 })
 
+const defaultFormData = structuredClone(toRaw(formData.value))
+
 // 各标签页的全局配置开关
 const useGlobalOrganize = ref(true)
 const useGlobalDownload = ref(true)
@@ -70,6 +74,7 @@ const handleConfirm = () => {
   // 合并分类开关和表单数据
   emit('confirm', {
     ...formData.value,
+    r18: props.r18,
     use_global_organize: useGlobalOrganize.value,
     use_global_download: useGlobalDownload.value,
     use_global_naming: useGlobalNaming.value,
@@ -87,6 +92,16 @@ const handleMetadataFolderConfirm = (path: string) => {
 watch(() => props.show, (show) => {
   if (show) {
     activeTab.value = 'organize'
+    const settings = props.initialSettings
+    formData.value = {
+      ...structuredClone(defaultFormData),
+      // 配置是纯 JSON 数据；序列化克隆可同时剥离嵌套的 Vue 数组代理。
+      ...(settings ? JSON.parse(JSON.stringify(settings)) as ManualJobAdvancedSettings : {}),
+    }
+    useGlobalOrganize.value = settings?.use_global_organize ?? true
+    useGlobalDownload.value = settings?.use_global_download ?? true
+    useGlobalNaming.value = settings?.use_global_naming ?? true
+    useGlobalMetadata.value = settings?.use_global_metadata ?? true
   }
 })
 </script>

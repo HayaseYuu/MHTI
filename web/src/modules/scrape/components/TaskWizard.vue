@@ -128,6 +128,7 @@ const {
           v-model:link-mode="formData.link_mode"
           v-model:delete-empty-parent="formData.delete_empty_parent"
           v-model:allow-local-output="allowLocalOutput"
+          v-model:r18="formData.r18"
           :config-reuse-id="formData.config_reuse_id"
           :config-reuse-options="configReuseOptions"
           :involves-p115="involvesP115"
@@ -187,6 +188,8 @@ const {
   <!-- 高级设置弹窗 -->
   <AdvancedSettingsModal
     v-model:show="showAdvancedSettings"
+    :r18="formData.r18"
+    :initial-settings="advancedSettings"
     @confirm="handleAdvancedSettingsConfirm"
   />
 </template>

@@ -2,6 +2,7 @@
 
 import asyncio
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -47,8 +48,8 @@ class ImageService:
         config = await self.config_service.get_proxy_config()
         return config.get_url()
 
+    @staticmethod
     def get_full_image_url(
-        self,
         path: str | None,
         size: ImageSize = ImageSize.W500,
     ) -> str | None:
@@ -63,6 +64,20 @@ class ImageService:
             Full image URL or None if path is empty.
         """
         if not path:
+            return None
+        parsed = urlsplit(path)
+        if parsed.scheme or parsed.netloc:
+            # 只接受官方 HTTPS CDN，拒绝凭据、端口覆盖、伪装子域与任意外站。
+            if (
+                parsed.scheme == "https"
+                and parsed.hostname in {"image.tmdb.org", "s4.anilist.co"}
+                and parsed.username is None
+                and parsed.password is None
+                and parsed.netloc in {"image.tmdb.org", "s4.anilist.co"}
+            ):
+                return path
+            return None
+        if not path.startswith("/") or path.startswith("//"):
             return None
         return f"{TMDB_IMAGE_BASE_URL}/{size.value}{path}"
 

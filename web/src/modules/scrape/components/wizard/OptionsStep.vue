@@ -24,6 +24,7 @@ defineProps<{
   configReuseOptions: SelectMixedOption[]
   involvesP115: boolean
   allowLocalOutput: boolean
+  r18: boolean
   showMoveOptions: boolean
   advancedSettings: ManualJobAdvancedSettings | null
 }>()
@@ -33,6 +34,7 @@ const emit = defineEmits<{
   'update:deleteEmptyParent': [value: boolean]
   'update:configReuseId': [value: number]
   'update:allowLocalOutput': [value: boolean]
+  'update:r18': [value: boolean]
   /** 打开高级设置弹窗（父组件持有弹窗实例） */
   openAdvanced: []
 }>()
@@ -52,10 +54,12 @@ const linkModeOptions = LINK_MODE_OPTIONS_BASIC
       :config-reuse-options="configReuseOptions"
       :involves-p115="involvesP115"
       :allow-local-output="allowLocalOutput"
+      :r18="r18"
       @update:link-mode="emit('update:linkMode', $event)"
       @update:delete-empty-parent="emit('update:deleteEmptyParent', $event)"
       @update:config-reuse-id="emit('update:configReuseId', $event)"
       @update:allow-local-output="emit('update:allowLocalOutput', $event)"
+      @update:r18="emit('update:r18', $event)"
     />
 
     <div class="advanced-row">

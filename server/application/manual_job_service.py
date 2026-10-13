@@ -64,6 +64,7 @@ def _deserialize_locator(payload: str | None) -> StorageLocator | None:
     except (json.JSONDecodeError, ValueError, TypeError):
         return None
 
+
 # 任务队列
 _job_queue: asyncio.Queue[int] = asyncio.Queue()
 _worker_task: asyncio.Task | None = None
@@ -86,6 +87,8 @@ class ManualJobService:
         await self._ensure_db()
         now = datetime.now()
 
+        # 新任务显式保存默认表番模式，与旧版空设置区分。
+        job.advanced_settings = job.advanced_settings or ManualJobAdvancedSettings()
         # 序列化高级设置
         advanced_settings_json = None
         if job.advanced_settings is not None:
@@ -194,11 +197,14 @@ class ManualJobService:
         # 兼容旧数据，source 可能不存在
         source_value = row["source"] if "source" in row.keys() else "manual"
 
-        # 反序列化高级设置
-        advanced_settings = None
+        # 原版没有 r18 字段且只处理成人；读取旧任务时保留原模式。
+        advanced_settings = ManualJobAdvancedSettings(r18=True)
         if "advanced_settings" in row.keys() and row["advanced_settings"]:
             try:
                 settings_data = json.loads(row["advanced_settings"])
+                if not isinstance(settings_data, dict):
+                    raise ValueError("任务设置必须是对象")
+                settings_data.setdefault("r18", True)
                 advanced_settings = ManualJobAdvancedSettings(**settings_data)
             except (json.JSONDecodeError, ValueError):
                 pass  # 解析失败则使用 None
@@ -265,8 +271,8 @@ async def _job_worker() -> None:
 
 async def _execute_job(service: ManualJobService, job_id: int) -> None:
     """Execute a single manual job - 扫描文件并投递到刮削任务队列"""
-    from server.domain.media.file_service import FileService
     from server.application.scrape_job_service import ScrapeJobService
+    from server.domain.media.file_service import FileService
     from server.models.scrape_job import ScrapeJobCreate, ScrapeJobSource
 
     job = await service.get_job(job_id)
@@ -286,8 +292,7 @@ async def _execute_job(service: ManualJobService, job_id: int) -> None:
         scan_path = Path(job.scan_path)
 
         is_p115_source = (
-            job.scan_locator is not None
-            and job.scan_locator.provider == StorageProvider.P115
+            job.scan_locator is not None and job.scan_locator.provider == StorageProvider.P115
         )
 
         if is_p115_source:
@@ -376,31 +381,41 @@ async def _execute_job(service: ManualJobService, job_id: int) -> None:
         # 让用户在记录页能看到失败原因。
         try:
             from server.application.history_service import HistoryService
-            from server.models.history import HistoryRecordCreate, TaskStatus, TaskSource, HistoryConflictType
+            from server.models.history import (
+                HistoryConflictType,
+                HistoryRecordCreate,
+                TaskSource,
+                TaskStatus,
+            )
+
             duration = (datetime.now() - started_at).total_seconds()
-            await HistoryService().create_record(HistoryRecordCreate(
-                task_name=f"手动任务 #{job_id} 扫描失败",
-                folder_path=job.scan_path,
-                status=TaskStatus.FAILED,
-                source=TaskSource.MANUAL,
-                total_files=0,
-                success_count=0,
-                failed_count=1,
-                duration_seconds=duration,
-                manual_job_id=job_id,
-                error_message=str(e),
-                conflict_type=HistoryConflictType.NO_MATCH,
-                conflict_data={
-                    "output_dir": job.target_folder,
-                    "metadata_dir": job.metadata_dir or None,
-                    "link_mode": _link_mode_to_organize_mode(job.link_mode).value,
-                    "parsed_title": None,
-                    "parsed_season": None,
-                    "parsed_episode": None,
-                },
-            ))
+            await HistoryService().create_record(
+                HistoryRecordCreate(
+                    task_name=f"手动任务 #{job_id} 扫描失败",
+                    folder_path=job.scan_path,
+                    status=TaskStatus.FAILED,
+                    source=TaskSource.MANUAL,
+                    total_files=0,
+                    success_count=0,
+                    failed_count=1,
+                    duration_seconds=duration,
+                    manual_job_id=job_id,
+                    error_message=str(e),
+                    conflict_type=HistoryConflictType.NO_MATCH,
+                    conflict_data={
+                        "output_dir": job.target_folder,
+                        "metadata_dir": job.metadata_dir or None,
+                        "link_mode": _link_mode_to_organize_mode(job.link_mode).value,
+                        "parsed_title": None,
+                        "parsed_season": None,
+                        "parsed_episode": None,
+                    },
+                )
+            )
         except Exception as hist_err:
-            logger.warning(f"Failed to create history record for failed manual job {job_id}: {hist_err}")
+            logger.warning(
+                f"Failed to create history record for failed manual job {job_id}: {hist_err}"
+            )
 
 
 async def shutdown_workers() -> None:

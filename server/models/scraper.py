@@ -9,7 +9,7 @@ from server.models.history import ScrapeLogStep
 from server.models.manual_job import ManualJobAdvancedSettings
 from server.models.organize import OrganizeMode
 from server.models.storage import StorageLocator
-from server.models.tmdb import TMDBSearchResult, TMDBSeries, TMDBEpisode
+from server.models.tmdb import TMDBEpisode, TMDBSearchResult, TMDBSeries
 
 
 class ScrapeStatus(str, Enum):
@@ -92,6 +92,7 @@ class BatchScrapeRequest(BaseModel):
     output_dir: str | None = None
     auto_select: bool = True
     dry_run: bool = False  # 预览模式，不实际执行
+    advanced_settings: ManualJobAdvancedSettings | None = None
 
 
 class BatchScrapeResponse(BaseModel):

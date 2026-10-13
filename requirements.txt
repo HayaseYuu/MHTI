@@ -9,3 +9,6 @@ sse-starlette>=2.0,<3.0
 watchdog>=4.0,<5.0
 python-jose[cryptography]>=3.3,<4.0
 p115client==0.0.9.6.5.1
+
+# p115client 依赖的旧接口在 0.1.9 被删除，固定已验证的兼容版本。
+python-concurrenttools==0.1.8

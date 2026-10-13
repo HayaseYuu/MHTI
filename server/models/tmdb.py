@@ -1,13 +1,18 @@
 """TMDB data models."""
 
-from pydantic import BaseModel
 from datetime import date
+from typing import Literal
+
+from pydantic import BaseModel
 
 
 class TMDBSearchResult(BaseModel):
     """Single search result item."""
 
     id: int
+    metadata_source: Literal["tmdb", "anilist"] = "tmdb"
+    anilist_id: int | None = None
+    genre_ids: list[int] = []
     name: str
     original_name: str | None = None
     first_air_date: date | None = None
@@ -55,6 +60,9 @@ class TMDBSeries(BaseModel):
     """Complete series information."""
 
     id: int
+    metadata_source: Literal["tmdb", "anilist"] = "tmdb"
+    anilist_id: int | None = None
+    genre_ids: list[int] = []
     name: str
     original_name: str | None = None
     overview: str | None = None
@@ -62,6 +70,7 @@ class TMDBSeries(BaseModel):
     vote_average: float | None = None
     poster_path: str | None = None
     backdrop_path: str | None = None
+    adult: bool = False
     genres: list[str] = []
     status: str | None = None
     number_of_seasons: int | None = None

@@ -8,6 +8,7 @@
  */
 import { NIcon, NImage, NScrollbar, NSpin } from 'naive-ui'
 import { ArrowBackOutline, CalendarOutline, StarOutline } from '@vicons/ionicons5'
+import MetadataSourceBadge from '@/shared/components/business/MetadataSourceBadge.vue'
 import type { TMDBSearchResult } from '@/shared/types/common'
 import EmptyState from '@/shared/components/base/EmptyState.vue'
 import { useTmdbDisplay } from '@/modules/history/hooks/useTmdbDisplay'
@@ -51,6 +52,7 @@ const { getImageUrl, getYear } = useTmdbDisplay()
               {{ result.original_name }}
             </div>
             <div class="meta">
+              <MetadataSourceBadge :item="result" />
               <span v-if="result.first_air_date" class="meta-item">
                 <NIcon :component="CalendarOutline" :size="12" />
                 {{ getYear(result.first_air_date) }}
@@ -69,7 +71,7 @@ const { getImageUrl, getYear } = useTmdbDisplay()
           </div>
         </div>
       </div>
-      <EmptyState v-else title="暂无搜索结果" description="请点击右上角搜索按钮搜索 TMDB" />
+      <EmptyState v-else title="暂无搜索结果" description="请点击右上角搜索按钮搜索剧集" />
     </NScrollbar>
   </NSpin>
 </template>

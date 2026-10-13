@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 from server.models.manual_job import ManualJobAdvancedSettings
 
 if TYPE_CHECKING:
-    from server.domain.system.config_service import ConfigService
     from server.domain.metadata.tmdb_service import TMDBService
+    from server.domain.system.config_service import ConfigService
 
 
 class ScraperConfigResolver:
@@ -68,64 +68,28 @@ class ScraperConfigResolver:
                 "nfo_enabled": advanced_settings.nfo_enabled,
             }
 
-    async def check_config(self) -> tuple[bool, str | None]:
-        """检查必要配置是否已就绪。
-
-        Returns:
-            (is_ready, error_message) 元组。
-        """
-        # Check Cookie
-        cookie_status = await self.tmdb_service.get_cookie_status()
-        if not cookie_status.is_configured:
-            return False, "请先配置 TMDB Cookie"
-        if cookie_status.is_valid is False:
-            return False, "TMDB Cookie 已失效，请更新"
-
-        # Check API Token
+    async def check_config(self, r18: bool = False) -> tuple[bool, str | None]:
+        """表番可使用无凭据的 AniList，R18 仅要求 TMDB API Token。"""
+        if not r18:
+            return True, None
         token_status = await self.tmdb_service.get_api_token_status()
         if not token_status.is_configured:
             return False, "请先配置 TMDB API Token"
         if token_status.is_valid is False:
             return False, "TMDB API Token 已失效，请更新"
-
         return True, None
 
-    async def ensure_config_ready(self) -> None:
-        """确保必要配置已就绪。
+    async def ensure_config_ready(self, r18: bool = False) -> None:
+        """按任务模式检查凭据；API 刮削流程不依赖网页 Cookie。"""
+        await self.ensure_api_token_ready(r18)
 
-        Raises:
-            TMDBNotConfiguredError: Cookie 或 API Token 未配置。
-            TMDBInvalidCredentialsError: Cookie 或 API Token 已失效。
-        """
+    async def ensure_api_token_ready(self, r18: bool = False) -> None:
+        """R18 模式检查 API Token；表番允许回退到 AniList。"""
+        if not r18:
+            return
         from server.common.exceptions import (
-            TMDBNotConfiguredError,
             TMDBInvalidCredentialsError,
-        )
-
-        # Check Cookie
-        cookie_status = await self.tmdb_service.get_cookie_status()
-        if not cookie_status.is_configured:
-            raise TMDBNotConfiguredError("Cookie")
-        if cookie_status.is_valid is False:
-            raise TMDBInvalidCredentialsError("Cookie")
-
-        # Check API Token
-        token_status = await self.tmdb_service.get_api_token_status()
-        if not token_status.is_configured:
-            raise TMDBNotConfiguredError("API Token")
-        if token_status.is_valid is False:
-            raise TMDBInvalidCredentialsError("API Token")
-
-    async def ensure_api_token_ready(self) -> None:
-        """确保 API Token 已配置且有效。
-
-        Raises:
-            TMDBNotConfiguredError: API Token 未配置。
-            TMDBInvalidCredentialsError: API Token 已失效。
-        """
-        from server.common.exceptions import (
             TMDBNotConfiguredError,
-            TMDBInvalidCredentialsError,
         )
 
         token_status = await self.tmdb_service.get_api_token_status()

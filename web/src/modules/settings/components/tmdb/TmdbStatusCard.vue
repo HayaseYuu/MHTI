@@ -7,7 +7,7 @@
  * 现在只有一行：Token 状态徽章 + R18 徽章 + 上次检测时间 + 原因（有则显示），操作按钮靠右。
  *
  * R18 徽章不可省：Token 有效不等于能看到成人内容——TMDB 账户在官网隐藏了成人内容时，
- * 刮削会返回 0 条结果并报「未找到匹配的成人剧集」，看上去像关键词不对。
+ * R18 任务会返回 0 条结果并报「未找到匹配的成人剧集」，看上去像关键词不对。
  */
 import { NButton, NIcon } from 'naive-ui'
 import { KeyOutline, RefreshOutline, TimeOutline, TrashOutline } from '@vicons/ionicons5'
@@ -55,7 +55,8 @@ const emit = defineEmits<{
       class="status-adult"
       :class="{ 'is-off': status.adult_enabled === false }"
     >
-      {{ status.adult_message }}
+      R18 任务提示：{{ status.adult_message }}
+      <span v-if="status.adult_enabled === false">（表番模式不受此限制。）</span>
     </p>
 
     <div class="status-actions">

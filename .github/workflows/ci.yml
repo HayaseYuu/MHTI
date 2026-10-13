@@ -36,17 +36,17 @@ jobs:
       - name: 设置 Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
           cache: 'pip'
 
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt 2>/dev/null || pip install fastapi uvicorn aiosqlite httpx pydantic python-jose cryptography pytest pytest-asyncio pytest-cov
+          pip install -r requirements.txt pytest pytest-asyncio pytest-cov pytest-timeout
 
       - name: 运行测试
         run: |
-          pytest server/tests/ -v --cov=server --cov-report=xml --cov-report=term-missing || echo "测试完成"
+          pytest server/tests/ -v --timeout=60 --cov=server --cov-report=xml --cov-report=term-missing
 
       - name: 上传覆盖率报告
         uses: codecov/codecov-action@v5
@@ -78,7 +78,9 @@ jobs:
 
       - name: 类型检查
         working-directory: web
-        run: npm run build:check
+        run: |
+          npm run test:unit
+          npm run build:check
 
       - name: 构建产物检查
         working-directory: web

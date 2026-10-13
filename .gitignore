@@ -174,3 +174,8 @@ docker-compose.override.yml
 *.temp
 *.bak
 *.backup
+
+# 当前工作区的验证临时产物，不随源码发布
+/work/
+/output/playwright/
+web/.test-build/

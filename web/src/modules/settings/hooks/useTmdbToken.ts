@@ -126,7 +126,7 @@ export function useTmdbToken() {
         message.error(tokenStatus.value.error_message || 'Token 验证失败')
       }
       if (tokenStatus.value.is_valid && tokenStatus.value.adult_enabled === false) {
-        message.warning('R18 内容未开启，刮削会找不到任何结果')
+        message.warning('TMDB 账户未开启 R18 内容，仅影响成人剧集任务，表番模式不受此限制')
       }
     } catch (error) {
       message.error('验证失败')

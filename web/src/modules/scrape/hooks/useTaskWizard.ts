@@ -127,6 +127,8 @@ export function useTaskWizard(options: {
   watch(options.show, async (newVal) => {
     if (newVal) {
       await Promise.all([loadWatchedFolders(), loadGlobalConfig()])
+    } else {
+      resetWizardState()
     }
   })
 

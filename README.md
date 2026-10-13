@@ -2,13 +2,13 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)
-![Python](https://img.shields.io/badge/Python-3.11+-green.svg)
+![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
+![Python](https://img.shields.io/badge/Python-3.12+-green.svg)
 ![Vue](https://img.shields.io/badge/Vue-3.5-brightgreen.svg)
 ![Node](https://img.shields.io/badge/Node-24-339933.svg)
 ![License](https://img.shields.io/badge/license-MIT-orange.svg)
 
-**自动从 TMDB 获取剧集元数据，智能整理媒体文件**
+**表番使用 TMDB + AniList 双源元数据，R18 模式保留 TMDB 成人剧集刮削**
 
 [功能特性](#-功能特性) •
 [快速开始](#-快速开始) •
@@ -19,6 +19,43 @@
 </div>
 
 ---
+
+## ✨ 增强版 1.0.0：表番 / R18 双模式
+
+> 本版本以 HayaseYuu/MHTI 的 `ec04e3c`（原版本标识 2.0.0）为基线。
+> 按增强版独立发布序列使用 1.0.0，并不表示上游 2.0.0 的降级。
+
+### 创建任务
+
+1. 点击「创建刮削任务」，选择路径。
+2. 在「配置选项」切换 **R18**：
+   - **关闭（新任务默认）**：表番模式，同时搜索 TMDB 与 AniList，排除成人内容及真人剧。
+   - **开启**：成人模式，仅使用 TMDB 的成人剧集结果，保留原有流程。
+3. 在预览步骤确认模式和数据源，然后创建任务。任务级设置会跟随单文件任务、冲突处理和重刮。
+
+### 双源行为与配置
+
+- TMDB 使用「设置 → TMDB API Token」中的凭据；API 刮削不再被 Cookie 配置阻塞。
+- AniList 使用公共 GraphQL 接口，**无需额外 Token**，沿用系统代理和超时配置。
+- TMDB 为多季结构与单集详情的权威。只有规范化标题完全一致、首播年份一致且匹配无歧义时，
+  才补全 AniList 简介、评分、图片、类型与来源 ID；不会用 AniList 的单季度覆盖 TMDB 的多季。
+- TMDB 缺少条目或凭据不可用时，可选择 AniList 独立条目。另一数据源失败时保留可用结果。
+- AniList 不提供逐集标题/剧情/播出日期，故单集标题使用 `Episode N` 占位；
+  只按已知总集数核验。不知道集数时停在待处理，**不猜集数，不自动整理**。
+- AniList 的季度是独立条目，使用第 1 季；文件里的第 2 季等不会自动回退到第 1 季。
+  用户需要选择对应季度条目并确认季集。
+- 结果展示 TMDB / AniList 来源，NFO 保存真实 `tmdb` / `anilist` uniqueid。
+  AniList 内部负 ID 只用于旧整数任务协议，不会发送给 Emby 作为 TMDB ID。
+- 原版没有模式快照的任务及历史记录按原成人模式恢复；新任务默认表番。升级前请备份 `data/`。
+
+### 与原项目相比
+
+新增表番刮削、TMDB + AniList 双源搜索及补全、单源降级、任务级 R18 开关、来源标识、
+AniList NFO ID 与图片下载，并修复重刮/冲突处理丢失任务高级设置的问题。
+本地/115 存储、整理模式、字幕、监控、任务队列、历史记录、主题等原能力继续保留。
+
+发行包包括源码和前端构建产物，完整部署请按下文的 Dockerfile 自行构建；
+增强版源码发布不依赖原作者的 Docker Hub 凭据，不会覆盖 `xiyan520/mhti` 镜像。
 
 ## 📖 项目简介
 
@@ -492,7 +529,7 @@ python -m uvicorn server.main:app --host 127.0.0.1 --port 8000
 
 | 技术 | 版本 | 用途 |
 |------|------|------|
-| Python | 3.11+（Docker 3.12） | 运行时 |
+| Python | 3.12+（Docker 3.12） | 运行时 |
 | FastAPI | 0.109+ | Web 框架 |
 | Uvicorn | 0.27+ | ASGI 服务器 |
 | Pydantic | 2.6+ | 数据验证 |

@@ -11,6 +11,7 @@ from server.models.tmdb import TMDBSearchResult, TMDBSeason, TMDBSeries
 
 if TYPE_CHECKING:
     from server.domain.artifacts.nfo_service import NFOService
+    from server.domain.metadata.anime_metadata_service import AnimeMetadataService
     from server.domain.metadata.tmdb_service import TMDBService
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ class ScraperMetadataResolver:
     async def enrich_search_results(
         self,
         results: list[TMDBSearchResult],
+        metadata_service: TMDBService | AnimeMetadataService | None = None,
     ) -> list[TMDBSearchResult]:
         """为搜索结果添加详情信息（季数、集数）。
 
@@ -35,9 +37,17 @@ class ScraperMetadataResolver:
         Returns:
             添加了详情信息的搜索结果列表。
         """
+        provider = metadata_service if metadata_service is not None else self.tmdb_service
+
+        semaphore = asyncio.Semaphore(3)
+
         async def fetch_details(result: TMDBSearchResult) -> TMDBSearchResult:
+            # AniList 搜索已包含季数、集数，重复详情请求只会增加限流压力。
+            if result.metadata_source == "anilist" or result.id < 0:
+                return result
             try:
-                series = await self.tmdb_service.get_series_by_api(result.id)
+                async with semaphore:
+                    series = await provider.get_series_by_api(result.id)
                 if series:
                     result.number_of_seasons = series.number_of_seasons
                     result.number_of_episodes = series.number_of_episodes

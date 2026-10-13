@@ -1,7 +1,6 @@
 """File scanning service for video file discovery."""
 
 import asyncio
-import os
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +35,7 @@ SUPPORTED_VIDEO_EXTENSIONS: set[str] = {
 # 禁止访问的系统目录（安全防护）
 BLOCKED_PATHS = {
     "/etc", "/var", "/usr", "/bin", "/sbin", "/boot", "/root", "/proc", "/sys",
-    "C:\Windows", "C:\Program Files", "C:\Program Files (x86)",
+    "C:\\Windows", "C:\\Program Files", "C:\\Program Files (x86)",
 }
 VIRTUAL_115_ROOT_NAME = "115网盘"
 VIRTUAL_115_ROOT_PATH = f"/{VIRTUAL_115_ROOT_NAME}"
@@ -410,7 +409,8 @@ class FileService:
                             mtime=mtime,
                         )
                     )
-                except PermissionError:
+                except OSError:
+                    # 目录枚举与 stat 之间条目可能消失，失效符号链接也不应阻断浏览。
                     continue
 
             total = len(all_entries)

@@ -21,14 +21,15 @@ from server.domain.parsing.parser_service import ParserService
 from server.domain.system.config_service import ConfigService
 from server.domain.system.template_service import TemplateService
 from server.models.emby import ConflictCheckResult, ConflictType
+from server.models.manual_job import ManualJobAdvancedSettings
 from server.models.organize import OrganizeMode
 from server.models.rename import RenameRequest
 from server.models.scraper import ScrapeByIdRequest, ScrapeRequest, ScrapeStatus
 from server.models.storage import StorageLocator, StorageProvider
 from server.models.tmdb import (
+    TMDBEpisode,
     TMDBSearchResponse,
     TMDBSearchResult,
-    TMDBEpisode,
     TMDBSeason,
     TMDBSeries,
 )
@@ -37,6 +38,7 @@ from server.models.tmdb import (
 def _series() -> TMDBSeries:
     return TMDBSeries(
         id=123,
+        adult=True,
         name="Test Show",
         original_name="Test Show",
         first_air_date=date(2024, 1, 1),
@@ -140,6 +142,7 @@ async def test_scrape_by_id_local_success_full_tail(temp_db: Path, tmp_path: Pat
 
     result = await service.scrape_by_id(
         ScrapeByIdRequest(
+            advanced_settings=ManualJobAdvancedSettings(r18=True),
             file_path=str(src),
             tmdb_id=123,
             season=1,
@@ -193,6 +196,7 @@ async def test_scrape_by_id_verify_fails_need_season_episode(temp_db: Path, tmp_
 
     result = await service.scrape_by_id(
         ScrapeByIdRequest(
+            advanced_settings=ManualJobAdvancedSettings(r18=True),
             file_path=str(src),
             tmdb_id=123,
             season=1,
@@ -223,6 +227,7 @@ async def test_scrape_by_id_has_no_emby_check(temp_db: Path, tmp_path: Path, mon
 
     result = await service.scrape_by_id(
         ScrapeByIdRequest(
+            advanced_settings=ManualJobAdvancedSettings(r18=True),
             file_path=str(src),
             tmdb_id=123,
             season=1,
@@ -274,6 +279,7 @@ async def test_scrape_by_id_file_conflict_reports_dest(temp_db: Path, tmp_path: 
 
     result = await service.scrape_by_id(
         ScrapeByIdRequest(
+            advanced_settings=ManualJobAdvancedSettings(r18=True),
             file_path=str(src),
             tmdb_id=123,
             season=1,
@@ -309,6 +315,7 @@ async def test_scrape_file_success_auto_select(temp_db: Path, tmp_path: Path, mo
 
     result = await service.scrape_file(
         ScrapeRequest(
+            advanced_settings=ManualJobAdvancedSettings(r18=True),
             file_path=str(src),
             output_dir=str(out_dir),
             auto_select=True,
@@ -322,7 +329,7 @@ async def test_scrape_file_success_auto_select(temp_db: Path, tmp_path: Path, mo
 
     names = _step_names(result)
     assert "解析文件名" in names
-    assert "搜索 TMDB" in names
+    assert "搜索 TMDB（R18）" in names
     assert "确定季/集" in names
     assert any("核验" in n for n in names)
     assert "生成 NFO" in names
@@ -341,6 +348,7 @@ async def test_scrape_file_emby_conflict_pauses(temp_db: Path, tmp_path: Path, m
 
     result = await service.scrape_file(
         ScrapeRequest(
+            advanced_settings=ManualJobAdvancedSettings(r18=True),
             file_path=str(src),
             output_dir=str(out_dir),
             auto_select=True,
@@ -373,6 +381,7 @@ async def test_scrape_file_multi_results_need_selection(temp_db: Path, tmp_path:
 
     result = await service.scrape_file(
         ScrapeRequest(
+            advanced_settings=ManualJobAdvancedSettings(r18=True),
             file_path=str(src),
             output_dir=str(out_dir),
             auto_select=True,
@@ -438,6 +447,7 @@ async def test_scrape_by_id_115_to_115_writes_local_metadata(temp_db: Path, tmp_
 
     result = await service.scrape_by_id(
         ScrapeByIdRequest(
+            advanced_settings=ManualJobAdvancedSettings(r18=True),
             file_path=file_locator.path,
             tmdb_id=123,
             season=1,

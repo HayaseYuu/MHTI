@@ -11,9 +11,9 @@ from server.models.emby import ConflictCheckRequest, ConflictCheckResult, Confli
 from server.models.tmdb import TMDBSeason, TMDBSeries
 
 if TYPE_CHECKING:
-    from server.domain.integration.emby_service import EmbyService
     from server.domain.artifacts.image_service import ImageService
     from server.domain.artifacts.subtitle_service import SubtitleService
+    from server.domain.integration.emby_service import EmbyService
 
 logger = logging.getLogger(__name__)
 
@@ -227,7 +227,7 @@ class ScraperMediaPipeline:
         return await self.emby_service.check_conflict(
             ConflictCheckRequest(
                 series_name=series_name,
-                tmdb_id=tmdb_id,
+                tmdb_id=tmdb_id if tmdb_id and tmdb_id > 0 else None,
                 season=season,
                 episode=episode,
             )

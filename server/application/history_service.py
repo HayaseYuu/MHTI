@@ -11,6 +11,7 @@ from pathlib import Path
 
 from server.application.undo_store import UndoSnapshot, UndoStore
 from server.infrastructure.db import DATABASE_PATH
+from server.infrastructure.realtime import get_notifier
 from server.infrastructure.repositories.history_repository import HistoryRepository
 from server.infrastructure.repositories.scraped_file_repository import ScrapedFileRepository
 from server.models.history import (
@@ -23,7 +24,7 @@ from server.models.history import (
     TaskStatus,
     UndoResponse,
 )
-from server.infrastructure.realtime import get_notifier
+from server.models.manual_job import ManualJobAdvancedSettings
 
 # 内存日志缓存：record_id -> list[ScrapeLogStep]
 _log_cache: dict[str, list[ScrapeLogStep]] = {}
@@ -95,6 +96,39 @@ def split_record_folder_path(folder_path: str | None) -> tuple[str | None, str |
     return source.strip() or None, target.strip() or None
 
 
+def _metadata_context(row) -> dict:
+    """恢复模式快照；原版记录只有成人模式，缺少快照时保留旧语义。"""
+    try:
+        context = json.loads(_row_get(row, "conflict_data") or "{}")
+        if not isinstance(context, dict):
+            context = {}
+    except (TypeError, ValueError):
+        context = {}
+    settings = context.get("advanced_settings")
+    if not isinstance(settings, dict):
+        settings = {"r18": True}
+    internal_id = _row_get(row, "tmdb_id") or context.get("tmdb_id")
+    series = context.get("series_info") or {}
+    if not isinstance(series, dict):
+        series = {}
+    anilist_id = context.get("anilist_id") or series.get("anilist_id")
+    if not isinstance(internal_id, int) or isinstance(internal_id, bool):
+        internal_id = None
+    if not isinstance(anilist_id, int) or isinstance(anilist_id, bool):
+        anilist_id = None
+    if internal_id and internal_id < 0:
+        anilist_id = -internal_id
+    try:
+        advanced_settings = ManualJobAdvancedSettings(**settings)
+    except (TypeError, ValueError):
+        advanced_settings = ManualJobAdvancedSettings(r18=True)
+    return {
+        "advanced_settings": advanced_settings,
+        "metadata_source": "anilist" if internal_id and internal_id < 0 else "tmdb",
+        "anilist_id": anilist_id,
+    }
+
+
 class HistoryService:
     """Service for managing scrape history records."""
 
@@ -126,8 +160,7 @@ class HistoryService:
         scrape_logs_json = None
         if record.scrape_logs:
             scrape_logs_json = json.dumps(
-                [log.model_dump() for log in record.scrape_logs],
-                ensure_ascii=False
+                [log.model_dump() for log in record.scrape_logs], ensure_ascii=False
             )
 
         display_id = await self._repo.insert_record(
@@ -155,6 +188,7 @@ class HistoryService:
             error_message=record.error_message,
             manual_job_id=record.manual_job_id,
             scrape_job_id=record.scrape_job_id,
+            **_metadata_context({"conflict_data": conflict_data_json}),
         )
 
         # 发送 WebSocket 通知
@@ -270,6 +304,7 @@ class HistoryService:
         timeout_step: str | None = None,
         timeout_seconds: int | None = None,
         tmdb_id: int | None = None,
+        replace_metadata: bool = False,
     ) -> bool:
         """Update a history record's status and conflict info."""
         await self._ensure_db()
@@ -299,6 +334,7 @@ class HistoryService:
             timeout_step=timeout_step,
             timeout_seconds=timeout_seconds,
             tmdb_id=tmdb_id,
+            replace_metadata=replace_metadata,
         )
 
         # 发送 WebSocket 通知
@@ -329,6 +365,34 @@ class HistoryService:
                 timeout_seconds=timeout_seconds,
                 tmdb_id=tmdb_id,
             )
+            if tmdb_id is not None:
+                update_data["metadata_source"] = "anilist" if tmdb_id < 0 else "tmdb"
+                if tmdb_id < 0:
+                    update_data["anilist_id"] = -tmdb_id
+            if conflict_data is not None:
+                if "anilist_id" in conflict_data:
+                    update_data["anilist_id"] = conflict_data["anilist_id"]
+                if "advanced_settings" in conflict_data:
+                    update_data["advanced_settings"] = conflict_data["advanced_settings"]
+            if replace_metadata:
+                # 明确发送 null，防止客户端合并载荷时沿用换源前的旧元数据。
+                values = locals()
+                for name in (
+                    "title",
+                    "original_title",
+                    "plot",
+                    "poster_url",
+                    "release_date",
+                    "rating",
+                    "tags",
+                    "season_number",
+                    "episode_number",
+                    "episode_title",
+                    "episode_overview",
+                    "episode_still_url",
+                    "episode_air_date",
+                ):
+                    update_data[name] = values[name] if name != "tags" else (tags or [])
             # 通知历史列表页（全局广播）
             await notifier.notify_history_updated(record_id, update_data)
             # 通知详情页订阅者（仅订阅了该记录的客户端）
@@ -402,24 +466,36 @@ class HistoryService:
 
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow([
-            "ID", "任务名称", "文件夹路径", "执行时间", "状态",
-            "总文件数", "成功数", "失败数", "耗时(秒)", "错误信息"
-        ])
+        writer.writerow(
+            [
+                "ID",
+                "任务名称",
+                "文件夹路径",
+                "执行时间",
+                "状态",
+                "总文件数",
+                "成功数",
+                "失败数",
+                "耗时(秒)",
+                "错误信息",
+            ]
+        )
 
         for record in records:
-            writer.writerow([
-                record.id,
-                record.task_name,
-                record.folder_path,
-                record.executed_at.isoformat(),
-                record.status.value,
-                record.total_files,
-                record.success_count,
-                record.failed_count,
-                record.duration_seconds,
-                record.error_message or "",
-            ])
+            writer.writerow(
+                [
+                    record.id,
+                    record.task_name,
+                    record.folder_path,
+                    record.executed_at.isoformat(),
+                    record.status.value,
+                    record.total_files,
+                    record.success_count,
+                    record.failed_count,
+                    record.duration_seconds,
+                    record.error_message or "",
+                ]
+            )
 
         return output.getvalue()
 
@@ -445,6 +521,7 @@ class HistoryService:
             manual_job_id=row["manual_job_id"],
             scrape_job_id=scrape_job_id,
             title=row["title"],
+            **_metadata_context(row),
             tmdb_id=_row_get(row, "tmdb_id"),
             season_number=row["season_number"],
             episode_number=row["episode_number"],
@@ -508,6 +585,7 @@ class HistoryService:
             manual_job_id=row["manual_job_id"],
             scrape_job_id=scrape_job_id,
             title=row["title"],
+            **_metadata_context(row),
             original_title=row["original_title"],
             plot=row["plot"],
             tags=tags,
@@ -551,17 +629,13 @@ class HistoryService:
 
         # 持久化到数据库
         await self._ensure_db()
-        scrape_logs_json = json.dumps(
-            [log.model_dump() for log in logs],
-            ensure_ascii=False
-        )
+        scrape_logs_json = json.dumps([log.model_dump() for log in logs], ensure_ascii=False)
         await self._repo.update_scrape_logs_json(record_id, scrape_logs_json)
 
         # 通过 WebSocket 推送日志更新（用于详情页实时刷新）
         notifier = get_notifier()
         await notifier.notify_history_detail_update(
-            record_id,
-            {"logs": [log.model_dump() for log in logs]}
+            record_id, {"logs": [log.model_dump() for log in logs]}
         )
 
     async def subscribe_logs(self, record_id: str) -> asyncio.Queue:

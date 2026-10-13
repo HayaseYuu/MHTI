@@ -36,38 +36,6 @@ class NFOService:
         lines = [line for line in lines if line.strip()]
         return XML_DECLARATION + "\n" + "\n".join(lines)
 
-    def _prettify_with_cdata(self, elem: ET.Element) -> str:
-        """
-        Return a pretty-printed XML string with CDATA for plot/outline.
-
-        Args:
-            elem: XML element to prettify.
-
-        Returns:
-            Pretty-printed XML string with CDATA sections.
-        """
-        result = self._prettify(elem)
-        # 将 plot 和 outline 的内容包装为 CDATA
-        import re
-        result = re.sub(
-            r'<plot>([^<]*)</plot>',
-            lambda m: f'<plot><![CDATA[{m.group(1)}]]></plot>',
-            result
-        )
-        result = re.sub(
-            r'<outline>([^<]*)</outline>',
-            lambda m: f'<outline><![CDATA[{m.group(1)}]]></outline>',
-            result
-        )
-        return result
-
-    def _escape_xml(self, text: str | None) -> str:
-        """Escape special XML characters."""
-        if text is None:
-            return ""
-        # XML special characters are handled by ElementTree automatically
-        return text
-
     def _add_element(
         self,
         parent: ET.Element,
@@ -93,7 +61,7 @@ class NFOService:
         """
         root = ET.Element("tvshow")
 
-        # plot 和 outline 使用 CDATA
+        # ElementTree 统一转义 XML 文本，避免实体再次塞入 CDATA 后被当作原文。
         if data.plot:
             plot_elem = ET.SubElement(root, "plot")
             plot_elem.text = data.plot
@@ -124,7 +92,7 @@ class NFOService:
         self._add_element(root, "sorttitle", data.sort_title or data.title)
 
         # tmdbid
-        if data.tmdb_id is not None:
+        if data.tmdb_id is not None and data.tmdb_id > 0:
             self._add_element(root, "tmdbid", str(data.tmdb_id))
 
         # premiered 和 releasedate
@@ -137,12 +105,16 @@ class NFOService:
             self._add_element(root, "genre", genre)
 
         # uniqueid
-        if data.tmdb_id is not None:
+        if data.tmdb_id is not None and data.tmdb_id > 0:
             uniqueid = ET.SubElement(root, "uniqueid", type="tmdb")
             uniqueid.text = str(data.tmdb_id)
 
+        if data.anilist_id is not None and data.anilist_id > 0:
+            uniqueid = ET.SubElement(root, "uniqueid", type="anilist")
+            uniqueid.text = str(data.anilist_id)
+
         # episodeguide
-        if data.tmdb_id is not None:
+        if data.tmdb_id is not None and data.tmdb_id > 0:
             self._add_element(root, "episodeguide", json.dumps({"tmdb": str(data.tmdb_id)}))
 
         # season 和 episode 固定为 -1
@@ -155,7 +127,7 @@ class NFOService:
         # status
         self._add_element(root, "status", data.status)
 
-        return self._prettify_with_cdata(root)
+        return self._prettify(root)
 
     def generate_season_nfo(self, data: SeasonNFO) -> str:
         """
@@ -249,7 +221,8 @@ class NFOService:
             rating=series.vote_average,
             year=year,
             plot=series.overview,
-            tmdb_id=series.id,
+            tmdb_id=series.id if series.id > 0 and series.metadata_source == "tmdb" else None,
+            anilist_id=series.anilist_id,
             genres=series.genres,
             premiered=series.first_air_date,
             status=series.status,

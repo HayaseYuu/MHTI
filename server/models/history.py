@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from server.models.manual_job import ManualJobAdvancedSettings
+
 
 class TaskStatus(str, Enum):
     """Task execution status."""
@@ -86,6 +88,9 @@ class HistoryRecord(BaseModel):
     manual_job_id: int | None = None
     scrape_job_id: str | None = None  # 关联的刮削任务ID
     title: str | None = None
+    advanced_settings: ManualJobAdvancedSettings | None = None
+    metadata_source: Literal["tmdb", "anilist"] = "tmdb"
+    anilist_id: int | None = None
     tmdb_id: int | None = None  # 已确定的 TMDB ID（重试时直接沿用，不必重新搜索）
     season_number: int | None = None
     episode_number: int | None = None

@@ -311,3 +311,14 @@ class TestProviderAwareBrowse:
         assert parent_path == "/115网盘"
         assert entries == []
         assert total == 0
+
+
+class TestLocalBrowseResilience:
+    def test_broken_symlink_does_not_block_directory_browse(self, tmp_path, file_service):
+        """失效符号链接是正常目录条目，不能让本地及 115 入口浏览 500。"""
+        (tmp_path / "video.mp4").write_bytes(b"video")
+        (tmp_path / "broken-link").symlink_to(tmp_path / "missing")
+        current, _, entries, total, _, _ = file_service.browse_directory(str(tmp_path))
+        assert current == str(tmp_path)
+        assert [entry.name for entry in entries] == ["video.mp4"]
+        assert total == 1

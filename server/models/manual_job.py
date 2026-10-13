@@ -4,6 +4,7 @@ from datetime import datetime
 from enum import Enum
 
 from pydantic import BaseModel
+
 from server.models.storage import StorageLocator
 
 
@@ -35,6 +36,9 @@ class JobSource(str, Enum):
 
 class ManualJobAdvancedSettings(BaseModel):
     """手动任务高级设置 - 分类全局配置开关"""
+
+    # 内容模式独立于全局配置，默认使用表番双数据源。
+    r18: bool = False
 
     # 各分类的全局配置开关
     use_global_organize: bool = True

@@ -1,11 +1,13 @@
 """Unit tests for NFO service."""
 
-import pytest
+import xml.etree.ElementTree as ET
 from datetime import date
 
+import pytest
+
 from server.domain.artifacts.nfo_service import NFOService
-from server.models.nfo import TVShowNFO, SeasonNFO, EpisodeNFO
-from server.models.tmdb import TMDBSeries, TMDBSeason, TMDBEpisode
+from server.models.nfo import EpisodeNFO, SeasonNFO, TVShowNFO
+from server.models.tmdb import TMDBEpisode, TMDBSeason, TMDBSeries
 
 
 @pytest.fixture
@@ -241,3 +243,21 @@ class TestNFOServiceSpecialCharacters:
 
         assert "Cat" in nfo
         assert "<title>" in nfo
+
+
+@pytest.mark.parametrize(
+    "plot",
+    [
+        "A & B <C> > D",
+        "CDATA 终止符 ]]> 不截断原文",
+        "已含实体文字 &amp; &lt; 保持原样",
+        '中文动画：角色说 "Hello" & <wave>',
+    ],
+)
+def test_tvshow_plot_and_outline_parse_roundtrip(nfo_service, plot):
+    """XML 特殊字符与 CDATA 终止符经过媒体库解析后仍是原文。"""
+    nfo = nfo_service.generate_tvshow_nfo(TVShowNFO(title="Anime", plot=plot))
+    root = ET.fromstring(nfo)
+    assert root.findtext("plot") == plot
+    assert root.findtext("outline") == plot
+    assert "<![CDATA[" not in nfo

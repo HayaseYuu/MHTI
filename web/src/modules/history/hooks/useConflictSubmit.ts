@@ -93,7 +93,7 @@ export function useConflictSubmit(options: {
 
     if (options.needManualInput()) {
       if (!options.selectedTmdbId.value) {
-        message.warning('请输入 TMDB ID')
+        message.warning('请选择元数据匹配结果')
         return
       }
     }

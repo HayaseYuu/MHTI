@@ -1744,3 +1744,16 @@ class TestP115AccountInfo:
         assert info.account is not None
         assert info.storage is not None
         assert info.device is None
+
+
+class TestP115DependencyCompatibility:
+    def test_pinned_concurrenttools_preserves_required_interfaces(self):
+        """固定传递依赖，防止 0.1.9 删除接口导致 p115client 无法导入。"""
+        import concurrenttools
+        from importlib.metadata import version
+
+        assert version("python-concurrenttools") == "0.1.8"
+        assert callable(concurrenttools.threadpool_map)
+        assert version("p115client") == "0.0.9.6.5.1"
+        p115_module, _ = p115_service_module._load_p115client_sync()
+        assert callable(p115_module.P115Client)

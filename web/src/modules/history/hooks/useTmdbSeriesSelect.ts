@@ -48,7 +48,7 @@ export function useTmdbSeriesSelect(
   ): Promise<TMDBSeries | null> => {
     loadingSeasons.value = true
     try {
-      const series = await tmdbApi.getSeries(tmdbId)
+      const series = await tmdbApi.getSeries(tmdbId, record()?.advanced_settings?.r18 ?? false)
       loadedSeasons.value = series.seasons || []
 
       const validSeasons = options.minEpisodes
@@ -103,7 +103,7 @@ export function useTmdbSeriesSelect(
   const enterEmbySeasonSelect = async () => {
     const tmdbId = record()?.conflict_data?.tmdb_id as number | null
     if (!tmdbId) {
-      message.error('缺少 TMDB ID')
+      message.error('缺少元数据 ID')
       return
     }
     const series = await loadSeasons(tmdbId, { errorMessage: '加载剧集信息失败' })

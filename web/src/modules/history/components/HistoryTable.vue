@@ -171,7 +171,7 @@ const columns = computed<DataTableColumns<HistoryRecord>>(() => {
               size: 'tiny',
               quaternary: true,
               disabled: props.busyId === row.id,
-              'aria-label': `按 TMDB ID 重刮 #${row.display_id}`,
+              'aria-label': `按元数据 ID 重刮 #${row.display_id}`,
               onClick: stop(() => emit('rescape', row)),
             },
             { default: () => '重刮' },

@@ -16,6 +16,7 @@ export type LinkMode = (typeof LinkMode)[keyof typeof LinkMode]
 
 export interface ManualJob {
   id: number
+  advanced_settings?: Partial<ManualJobAdvancedSettings> | null
   scan_path: string
   target_folder: string
   metadata_dir: string
@@ -44,11 +45,13 @@ export interface ManualJobCreate {
   link_mode?: LinkMode
   delete_empty_parent?: boolean
   config_reuse_id?: number | null
-  advanced_settings?: ManualJobAdvancedSettings | null
+  advanced_settings?: Partial<ManualJobAdvancedSettings> | null
 }
 
 // 手动任务高级设置 - 剧集刮削器
 export interface ManualJobAdvancedSettings {
+  /** 关闭时刮削表番，开启时仅匹配成人剧集 */
+  r18: boolean
   // 各分类的全局配置开关
   use_global_organize: boolean
   use_global_download: boolean
@@ -87,7 +90,7 @@ export interface ManualJobAdvancedSettings {
 /** 高级设置表单数据：4 个分类开关由父组件单独持有，不在表单对象内 */
 export type AdvancedSettingsForm = Omit<
   ManualJobAdvancedSettings,
-  'use_global_organize' | 'use_global_download' | 'use_global_naming' | 'use_global_metadata'
+  'r18' | 'use_global_organize' | 'use_global_download' | 'use_global_naming' | 'use_global_metadata'
 >
 
 export interface ManualJobListResponse {

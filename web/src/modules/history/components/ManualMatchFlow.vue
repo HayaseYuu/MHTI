@@ -20,6 +20,7 @@ import {
   NTag,
   NThing,
 } from 'naive-ui'
+import MetadataSourceBadge from '@/shared/components/business/MetadataSourceBadge.vue'
 import type { TMDBEpisode, TMDBSearchResult, TMDBSeason } from '@/shared/types/common'
 import { useTmdbDisplay } from '@/modules/history/hooks/useTmdbDisplay'
 
@@ -84,6 +85,7 @@ const { getImageUrl, getYear } = useTmdbDisplay()
                 </template>
                 <template #header>
                   {{ item.name }}
+                  <MetadataSourceBadge :item="item" />
                   <NTag v-if="item.first_air_date" size="small" style="margin-left: 8px">
                     {{ getYear(item.first_air_date) }}
                   </NTag>

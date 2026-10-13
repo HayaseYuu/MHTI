@@ -10,7 +10,7 @@ import type { TMDBSearchResult } from '@/shared/types/common'
  * - 'fixed'（手动匹配）：catch 固定文案"搜索失败"
  * - 'detail'（搜索弹窗）：解析 response.data.message/error，兜底"搜索失败"
  */
-export function useTmdbSearch(errorMode: 'fixed' | 'detail' = 'fixed') {
+export function useTmdbSearch(errorMode: 'fixed' | 'detail' = 'fixed', r18: () => boolean = () => false) {
   const message = useMessage()
 
   const query = ref('')
@@ -27,9 +27,8 @@ export function useTmdbSearch(errorMode: 'fixed' | 'detail' = 'fixed') {
     searching.value = true
     hasSearched.value = true
     try {
-      const response = await tmdbApi.search(query.value)
-      // 只显示成人内容
-      results.value = response.results.filter((r) => r.adult)
+      const response = await tmdbApi.search(query.value, r18())
+      results.value = response.results
     } catch (error: unknown) {
       if (errorMode === 'detail') {
         const err = error as { response?: { data?: { error?: string; message?: string } } }

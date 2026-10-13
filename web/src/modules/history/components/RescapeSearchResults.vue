@@ -10,6 +10,7 @@
  * 且带悬停位移 + 投影，不符合当前设计语言（Soft Minimalism 禁项）。
  */
 import { NImage, NList, NListItem, NTag } from 'naive-ui'
+import MetadataSourceBadge from '@/shared/components/business/MetadataSourceBadge.vue'
 import type { TMDBSearchResult } from '@/shared/types/common'
 import { useTmdbDisplay } from '@/modules/history/hooks/useTmdbDisplay'
 
@@ -44,6 +45,7 @@ const { getImageUrl, getYear } = useTmdbDisplay()
         <div class="result-info">
           <div class="result-name">
             {{ item.name }}
+            <MetadataSourceBadge :item="item" />
             <NTag v-if="item.first_air_date" size="small">
               {{ getYear(item.first_air_date) }}
             </NTag>
@@ -55,7 +57,7 @@ const { getImageUrl, getYear } = useTmdbDisplay()
         </div>
 
         <NTag v-if="pickedId === item.id" size="small" type="success">已选</NTag>
-        <span v-else class="result-id">ID {{ item.id }}</span>
+
       </div>
     </NListItem>
   </NList>

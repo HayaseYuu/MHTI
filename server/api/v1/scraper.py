@@ -4,10 +4,10 @@
 由全局异常处理器统一处理。
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
-from server.api.deps import require_auth
-from server.api.deps import get_scraper_service
+from server.api.deps import get_scraper_service, require_auth
+from server.application.scraping.service import ScraperService
 from server.models.scraper import (
     BatchScrapeRequest,
     BatchScrapeResponse,
@@ -16,22 +16,22 @@ from server.models.scraper import (
     ScrapeRequest,
     ScrapeResult,
 )
-from server.application.scraping.service import ScraperService
 
 router = APIRouter(prefix="/api/scraper", tags=["scraper"], dependencies=[Depends(require_auth)])
 
 
 @router.get("/status")
 async def get_scraper_status(
+    r18: bool = Query(False, description="是否刮削成人剧集"),
     scraper_service: ScraperService = Depends(get_scraper_service),
 ) -> dict:
     """
-    Check if scraper is ready (Cookie and API Token configured).
+    Check scraper configuration for the requested content mode.
 
     Returns:
         Status dict with ready flag and message.
     """
-    is_ready, error = await scraper_service.check_config()
+    is_ready, error = await scraper_service.check_config(r18=r18)
     return {
         "ready": is_ready,
         "message": error if not is_ready else "刮削服务就绪",
@@ -46,7 +46,7 @@ async def preview_scrape(
     """
     Preview scrape operation without executing.
 
-    Parses filename and searches TMDB, but does not move files or generate NFO.
+    Parses filename and searches the selected sources, without modifying files.
 
     Args:
         request: Scrape request with file path.
@@ -54,7 +54,9 @@ async def preview_scrape(
     Returns:
         Preview with parsed info and search results.
     """
-    return await scraper_service.preview(request.file_path)
+    return await scraper_service.preview(
+        request.file_path, r18=bool(request.advanced_settings and request.advanced_settings.r18)
+    )
 
 
 @router.post("/file", response_model=ScrapeResult)
@@ -67,7 +69,7 @@ async def scrape_file(
 
     Complete workflow:
     1. Parse filename
-    2. Search TMDB (Cookie)
+    2. Search configured metadata sources
     3. Auto-select match
     4. Get details (API)
     5. Generate NFO
@@ -80,10 +82,12 @@ async def scrape_file(
         ScrapeResult with operation status.
 
     Raises:
-        TMDBNotConfiguredError: Cookie 或 API Token 未配置 (400)
-        TMDBInvalidCredentialsError: Cookie 或 API Token 已失效 (401)
+        TMDBNotConfiguredError: R18 API Token 未配置 (400)
+        TMDBInvalidCredentialsError: R18 API Token 已失效 (401)
     """
-    await scraper_service.ensure_config_ready()
+    await scraper_service.ensure_config_ready(
+        r18=bool(request.advanced_settings and request.advanced_settings.r18)
+    )
     return await scraper_service.scrape_file(request)
 
 
@@ -107,7 +111,9 @@ async def scrape_file_by_id(
         TMDBNotConfiguredError: API Token 未配置 (400)
         TMDBInvalidCredentialsError: API Token 已失效 (401)
     """
-    await scraper_service.ensure_api_token_ready()
+    await scraper_service.ensure_api_token_ready(
+        r18=bool(request.advanced_settings and request.advanced_settings.r18)
+    )
     return await scraper_service.scrape_by_id(request)
 
 
@@ -127,10 +133,12 @@ async def batch_scrape(
         BatchScrapeResponse with all results.
 
     Raises:
-        TMDBNotConfiguredError: Cookie 或 API Token 未配置 (400)
-        TMDBInvalidCredentialsError: Cookie 或 API Token 已失效 (401)
+        TMDBNotConfiguredError: R18 API Token 未配置 (400)
+        TMDBInvalidCredentialsError: R18 API Token 已失效 (401)
     """
     if not request.dry_run:
-        await scraper_service.ensure_config_ready()
+        await scraper_service.ensure_config_ready(
+            r18=bool(request.advanced_settings and request.advanced_settings.r18)
+        )
 
     return await scraper_service.batch_scrape(request)

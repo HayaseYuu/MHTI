@@ -40,6 +40,7 @@ export function useManualJobForm(options: {
     link_mode: LinkMode
     delete_empty_parent: boolean
     config_reuse_id: number | null
+    r18: boolean
   }
 
   const formData = ref<ManualJobFormData>({
@@ -49,6 +50,7 @@ export function useManualJobForm(options: {
     link_mode: LinkMode.MOVE,
     delete_empty_parent: true,
     config_reuse_id: null,
+    r18: false,
   })
 
   const scanLocator = ref<StorageLocator | null>(null)
@@ -79,6 +81,7 @@ export function useManualJobForm(options: {
       link_mode: LinkMode.MOVE,
       delete_empty_parent: true,
       config_reuse_id: null,
+      r18: false,
     }
     advancedSettings.value = null
     scanLocator.value = null
@@ -117,7 +120,8 @@ export function useManualJobForm(options: {
         link_mode: formData.value.link_mode,
         delete_empty_parent: formData.value.delete_empty_parent,
         config_reuse_id: formData.value.config_reuse_id,
-        advanced_settings: advancedSettings.value,
+        // 模式始终提交，未打开高级设置也不会丢失 R18 选择。
+        advanced_settings: { ...advancedSettings.value, r18: formData.value.r18 },
       })
       options.onSuccess()
       handleClose()
@@ -160,12 +164,14 @@ export function useManualJobForm(options: {
       if (options.initialScanLocator()) {
         scanLocator.value = options.initialScanLocator()!
       }
+    } else {
+      resetForm()
     }
   })
 
   // 高级设置确认
   const handleAdvancedSettingsConfirm = (settings: ManualJobAdvancedSettings) => {
-    advancedSettings.value = settings
+    advancedSettings.value = { ...settings, r18: formData.value.r18 }
   }
 
   return {

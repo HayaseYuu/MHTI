@@ -64,6 +64,7 @@ export function useHistoryRecordDetail() {
       // 后端新增推送的字段：started_at 驱动耗时实时跳动，conflict_* 让
       // 页面在跑完前就能弹出处理入口（以前要刷新才看得到）
       'started_at', 'translator', 'conflict_type', 'conflict_data',
+      'tmdb_id', 'anilist_id', 'metadata_source', 'advanced_settings',
     ]
     keys.forEach(assign)
   }

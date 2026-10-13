@@ -35,7 +35,10 @@ const {
   hasSearched: manualHasSearched,
   search: handleManualSearch,
   reset: resetManualSearch,
-} = useTmdbSearch('fixed')
+} = useTmdbSearch(
+  'fixed',
+  () => props.record?.advanced_settings?.r18 ?? false,
+)
 
 // 是否为重试模式
 const isRetryMode = computed(() => props.mode === 'retry')
@@ -123,7 +126,10 @@ const {
   hasSearched: tmdbHasSearched,
   search: handleTmdbSearch,
   reset: resetTmdbSearch,
-} = useTmdbSearch('detail')
+} = useTmdbSearch(
+  'detail',
+  () => props.record?.advanced_settings?.r18 ?? false,
+)
 const showTmdbSearchModal = ref(false)
 
 // TMDB 搜索选择剧集

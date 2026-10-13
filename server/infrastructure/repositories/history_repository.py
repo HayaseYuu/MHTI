@@ -132,7 +132,8 @@ class HistoryRepository(BaseRepository):
                 INSERT INTO history_records
                 (id, display_id, task_name, folder_path, executed_at, status, source, total_files,
                  success_count, failed_count, duration_seconds, error_message,
-                 manual_job_id, scrape_job_id, file_fingerprint, conflict_type, conflict_data, scrape_logs,
+                 manual_job_id, scrape_job_id, file_fingerprint, conflict_type, conflict_data,
+                 scrape_logs,
                  started_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
@@ -201,7 +202,7 @@ class HistoryRepository(BaseRepository):
                 # 快速模式：第一页且无筛选时，假设 total 足够大
                 # 多查一条判断是否有更多数据
                 cursor = await db.execute(
-                    f"""
+                    """
                     SELECT * FROM history_records
                     ORDER BY executed_at DESC
                     LIMIT ? OFFSET ?
@@ -210,8 +211,6 @@ class HistoryRepository(BaseRepository):
                 )
                 rows = await cursor.fetchall()
 
-                # 判断是否有更多数据
-                has_more = len(rows) > limit
                 records = list(rows[:limit])
 
                 # 如果数据不足 limit+1 条，说明已经到最后一页
@@ -219,9 +218,7 @@ class HistoryRepository(BaseRepository):
                     total = len(records)
                 else:
                     # 需要获取实际总数（仅当有更多数据时）
-                    cursor = await db.execute(
-                        "SELECT COUNT(*) as count FROM history_records"
-                    )
+                    cursor = await db.execute("SELECT COUNT(*) as count FROM history_records")
                     row = await cursor.fetchone()
                     total = row["count"] if row else len(records)
             else:
@@ -248,9 +245,7 @@ class HistoryRepository(BaseRepository):
         return records, total
 
     async def get_record_raw(self, record_id: str) -> aiosqlite.Row | None:
-        return await self._fetch_one(
-            "SELECT * FROM history_records WHERE id = ?", (record_id,)
-        )
+        return await self._fetch_one("SELECT * FROM history_records WHERE id = ?", (record_id,))
 
     async def get_fingerprints(self, fingerprints: list[str]) -> set[str]:
         if not fingerprints:
@@ -258,7 +253,8 @@ class HistoryRepository(BaseRepository):
 
         placeholders = ",".join("?" * len(fingerprints))
         rows = await self._fetch_all(
-            f"SELECT DISTINCT file_fingerprint FROM history_records WHERE file_fingerprint IN ({placeholders})",
+            "SELECT DISTINCT file_fingerprint FROM history_records "
+            f"WHERE file_fingerprint IN ({placeholders})",
             tuple(fingerprints),
         )
         return {row[0] for row in rows if row[0]}
@@ -318,7 +314,8 @@ class HistoryRepository(BaseRepository):
         placeholders = ",".join("?" * len(columns))
         async with self._connect() as db:
             await db.execute(
-                f"INSERT OR REPLACE INTO history_records ({','.join(columns)}) VALUES ({placeholders})",
+                f"INSERT OR REPLACE INTO history_records ({','.join(columns)}) "
+                f"VALUES ({placeholders})",
                 tuple(row[c] for c in columns),
             )
             await db.commit()
@@ -349,6 +346,7 @@ class HistoryRepository(BaseRepository):
         timeout_step: str | None = None,
         timeout_seconds: int | None = None,
         tmdb_id: int | None = None,
+        replace_metadata: bool = False,
     ) -> bool:
         updates = []
         params = []
@@ -368,43 +366,43 @@ class HistoryRepository(BaseRepository):
         if conflict_data is not None:
             updates.append("conflict_data = ?")
             params.append(json.dumps(conflict_data, ensure_ascii=False))
-        if title is not None:
+        if title is not None or replace_metadata:
             updates.append("title = ?")
             params.append(title)
-        if original_title is not None:
+        if original_title is not None or replace_metadata:
             updates.append("original_title = ?")
             params.append(original_title)
-        if plot is not None:
+        if plot is not None or replace_metadata:
             updates.append("plot = ?")
             params.append(plot)
-        if poster_url is not None:
+        if poster_url is not None or replace_metadata:
             updates.append("poster_url = ?")
             params.append(poster_url)
-        if release_date is not None:
+        if release_date is not None or replace_metadata:
             updates.append("release_date = ?")
             params.append(release_date)
-        if rating is not None:
+        if rating is not None or replace_metadata:
             updates.append("rating = ?")
             params.append(rating)
-        if tags is not None:
+        if tags is not None or replace_metadata:
             updates.append("tags = ?")
-            params.append(json.dumps(tags, ensure_ascii=False))
-        if season_number is not None:
+            params.append(json.dumps(tags or [], ensure_ascii=False))
+        if season_number is not None or replace_metadata:
             updates.append("season_number = ?")
             params.append(season_number)
-        if episode_number is not None:
+        if episode_number is not None or replace_metadata:
             updates.append("episode_number = ?")
             params.append(episode_number)
-        if episode_title is not None:
+        if episode_title is not None or replace_metadata:
             updates.append("episode_title = ?")
             params.append(episode_title)
-        if episode_overview is not None:
+        if episode_overview is not None or replace_metadata:
             updates.append("episode_overview = ?")
             params.append(episode_overview)
-        if episode_still_url is not None:
+        if episode_still_url is not None or replace_metadata:
             updates.append("episode_still_url = ?")
             params.append(episode_still_url)
-        if episode_air_date is not None:
+        if episode_air_date is not None or replace_metadata:
             updates.append("episode_air_date = ?")
             params.append(episode_air_date)
         if duration_seconds is not None:
@@ -497,9 +495,23 @@ class HistoryRepository(BaseRepository):
                season_number = ?, episode_number = ?, episode_title = ?,
                episode_overview = ?, episode_still_url = ?, episode_air_date = ?
                WHERE id = ?""",
-            (TaskStatus.SUCCESS.value, folder_path, duration_seconds,
-             title, original_title, plot, poster_url,
-             release_date, rating, tags_json,
-             season_number, episode_number, episode_title,
-             episode_overview, episode_still_url, episode_air_date, record_id),
+            (
+                TaskStatus.SUCCESS.value,
+                folder_path,
+                duration_seconds,
+                title,
+                original_title,
+                plot,
+                poster_url,
+                release_date,
+                rating,
+                tags_json,
+                season_number,
+                episode_number,
+                episode_title,
+                episode_overview,
+                episode_still_url,
+                episode_air_date,
+                record_id,
+            ),
         )

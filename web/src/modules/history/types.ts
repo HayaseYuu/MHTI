@@ -4,6 +4,8 @@
 
 // TMDB 相关
 export interface TMDBSearchResult {
+  metadata_source?: 'tmdb' | 'anilist'
+  anilist_id?: number
   id: number
   name: string
   original_name: string | null
@@ -43,6 +45,9 @@ export interface TMDBSeason {
 }
 
 export interface TMDBSeries {
+  metadata_source?: 'tmdb' | 'anilist'
+  anilist_id?: number
+  adult: boolean
   id: number
   name: string
   original_name: string | null
@@ -77,6 +82,9 @@ export interface ScrapeLogStep {
 
 export interface HistoryRecord {
   id: string
+  advanced_settings?: { r18?: boolean } | null
+  metadata_source?: 'tmdb' | 'anilist'
+  anilist_id?: number | null
   display_id: number
   task_name: string
   folder_path: string

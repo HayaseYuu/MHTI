@@ -6,11 +6,11 @@
 由调用方落库；这两个测试钉住回调的触发时机与「不触发」的分支。
 """
 
-import aiosqlite
 from datetime import date
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+import aiosqlite
 import pytest
 
 from server.application.history_service import HistoryService
@@ -23,12 +23,13 @@ from server.domain.system.template_service import TemplateService
 from server.infrastructure.db import create_all_tables
 from server.models.emby import ConflictCheckResult, ConflictType
 from server.models.history import HistoryRecordCreate, TaskStatus
+from server.models.manual_job import ManualJobAdvancedSettings
 from server.models.organize import OrganizeMode
 from server.models.scraper import ScrapeRequest, ScrapeStatus
 from server.models.tmdb import (
+    TMDBEpisode,
     TMDBSearchResponse,
     TMDBSearchResult,
-    TMDBEpisode,
     TMDBSeason,
     TMDBSeries,
 )
@@ -37,6 +38,7 @@ from server.models.tmdb import (
 def _series() -> TMDBSeries:
     return TMDBSeries(
         id=123,
+        adult=True,
         name="Test Show",
         original_name="Test Show",
         first_air_date=date(2024, 1, 1),
@@ -109,6 +111,7 @@ async def test_scrape_file_notifies_match_once(temp_db: Path, tmp_path: Path, mo
 
     result = await service.scrape_file(
         ScrapeRequest(
+            advanced_settings=ManualJobAdvancedSettings(r18=True),
             file_path=str(src),
             output_dir=str(tmp_path / "library"),
             auto_select=True,
@@ -139,6 +142,7 @@ async def test_scrape_file_does_not_notify_when_verify_fails(temp_db: Path, tmp_
 
     result = await service.scrape_file(
         ScrapeRequest(
+            advanced_settings=ManualJobAdvancedSettings(r18=True),
             file_path=str(src),
             output_dir=str(tmp_path / "library"),
             auto_select=True,
@@ -162,6 +166,7 @@ async def test_scrape_file_without_callback_still_succeeds(temp_db: Path, tmp_pa
 
     result = await service.scrape_file(
         ScrapeRequest(
+            advanced_settings=ManualJobAdvancedSettings(r18=True),
             file_path=str(src),
             output_dir=str(tmp_path / "library"),
             auto_select=True,

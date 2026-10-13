@@ -21,6 +21,7 @@ import {
   NInput,
   NModal,
   NScrollbar,
+  NSelect,
   NSpace,
   NSpin,
 } from 'naive-ui'
@@ -28,6 +29,7 @@ import { SearchOutline } from '@vicons/ionicons5'
 import type { HistoryRecord } from '@/modules/history/types'
 import type { TMDBSearchResult } from '@/shared/types/common'
 import { useTmdbSearch } from '@/modules/history/hooks/useTmdbSearch'
+import { getMetadataId, getMetadataSource } from '@/shared/utils/metadata'
 import RescapeSearchResults from '@/modules/history/components/RescapeSearchResults.vue'
 
 const props = defineProps<{
@@ -42,9 +44,18 @@ const emit = defineEmits<{
   submit: [payload: { tmdbId: number; season: number; episode: number }]
 }>()
 
-const { query, searching, results, hasSearched, search, reset } = useTmdbSearch('detail')
+const { query, searching, results, hasSearched, search, reset } = useTmdbSearch(
+  'detail',
+  () => props.record?.advanced_settings?.r18 ?? false,
+)
 
 const tmdbId = ref('')
+const metadataSource = ref<'tmdb' | 'anilist'>('tmdb')
+const r18 = computed(() => props.record?.advanced_settings?.r18 ?? false)
+const sourceOptions = computed(() => [
+  { label: 'TMDB', value: 'tmdb' },
+  ...(!r18.value ? [{ label: 'AniList', value: 'anilist' }] : []),
+])
 const season = ref('1')
 const episode = ref('1')
 const picked = ref<TMDBSearchResult | null>(null)
@@ -54,6 +65,7 @@ watch(() => props.show, (show) => {
   if (!show) return
   reset()
   picked.value = null
+  metadataSource.value = 'tmdb'
   tmdbId.value = ''
   season.value = String(props.record?.season_number ?? 1)
   episode.value = String(props.record?.episode_number ?? 1)
@@ -89,7 +101,8 @@ const recordSummary = computed(() => {
 
 function handlePick(item: TMDBSearchResult) {
   picked.value = item
-  tmdbId.value = String(item.id)
+  metadataSource.value = getMetadataSource(item)
+  tmdbId.value = String(getMetadataId(item))
 }
 
 function handleClose() {
@@ -99,7 +112,7 @@ function handleClose() {
 function handleSubmit() {
   if (!valid.value || props.loading) return
   emit('submit', {
-    tmdbId: parsedId.value as number,
+    tmdbId: metadataSource.value === 'anilist' ? -(parsedId.value as number) : parsedId.value as number,
     season: parsedSeason.value as number,
     episode: parsedEpisode.value as number,
   })
@@ -111,7 +124,7 @@ function handleSubmit() {
   <NModal
     :show="show"
     preset="card"
-    title="按 TMDB ID 重刮"
+    title="按元数据 ID 重刮"
     style="width: 640px; max-width: 95vw"
     :bordered="false"
     :segmented="{ content: true }"
@@ -124,7 +137,7 @@ function handleSubmit() {
       <NSpace>
         <NInput
           v-model:value="query"
-          placeholder="输入剧集名称搜索 TMDB..."
+          :placeholder="r18 ? '输入成人剧集名称搜索 TMDB...' : '输入表番名称搜索 TMDB + AniList...'"
           :input-props="{ 'aria-label': '搜索剧集名称' }"
           @keyup.enter="search"
         >
@@ -135,7 +148,7 @@ function handleSubmit() {
 
       <NSpin :show="searching">
         <NScrollbar style="max-height: 260px">
-          <NEmpty v-if="hasSearched && results.length === 0" description="未找到成人内容匹配结果" />
+          <NEmpty v-if="hasSearched && results.length === 0" description="未找到匹配结果" />
           <RescapeSearchResults
             v-else-if="results.length > 0"
             :results="results"
@@ -146,12 +159,16 @@ function handleSubmit() {
       </NSpin>
 
       <div class="fields">
+        <label class="field field-source">
+          <span class="field-label">数据源</span>
+          <NSelect v-model:value="metadataSource" :options="sourceOptions" aria-label="元数据来源" />
+        </label>
         <label class="field">
-          <span class="field-label">TMDB ID</span>
+          <span class="field-label">{{ metadataSource === 'anilist' ? 'AniList ID' : 'TMDB ID' }}</span>
           <NInput
             v-model:value="tmdbId"
             placeholder="例如 12345"
-            :input-props="{ inputmode: 'numeric', 'aria-label': 'TMDB ID' }"
+            :input-props="{ inputmode: 'numeric', 'aria-label': '元数据 ID' }"
           />
         </label>
         <label class="field field-narrow">
@@ -171,7 +188,7 @@ function handleSubmit() {
       </div>
 
       <p v-if="picked" class="picked-hint">
-        已选：{{ picked.name }}（ID {{ picked.id }}），提交前请确认季/集是否与该剧集一致。
+        已选：{{ picked.name }}（{{ getMetadataSource(picked) === 'anilist' ? 'AniList' : 'TMDB' }} ID {{ getMetadataId(picked) }}），提交前请确认季/集是否与该剧集一致。
       </p>
 
       <p class="hint">
@@ -201,15 +218,20 @@ function handleSubmit() {
 
 .fields {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-3);
 }
 
 .field {
-  flex: 1;
+  flex: 1 1 110px;
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+}
+
+.field-source {
+  flex: 0 0 108px;
 }
 
 .field-narrow {

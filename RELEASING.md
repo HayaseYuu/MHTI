@@ -1,3 +1,18 @@
+# 增强版 1.0.0 发布
+
+- `VERSION`、Python/Vue/API/Docker 标签保持同一版本。
+- 推送 main 的 `VERSION` 变更，触发 **Enhanced Source Release**。
+- 后端测试、前端类型检查及构建全部成功后，创建 `v1.0.0` 与 GitHub Release。
+- 发布源码 ZIP、前端 ZIP、SHA256SUMS；不需要 Docker Hub secrets。
+- 发行说明采用 `RELEASE_NOTES_1.0.0.md`，不只列提交标题。
+- 工作流支持手动运行；同名版本已有 Release 时不覆盖已有资产。
+- 原 Build and Release 工作流仍可选用，它依赖 Docker Hub secrets；
+  增强版自动源码发布不触发它，也不覆盖原作者 Docker 镜像。
+
+---
+
+## 原项目发布指南（保留参考）
+
 # 版本发布指南
 
 本项目使用 [语义化版本](https://semver.org/lang/zh-CN/) 进行版本控制。

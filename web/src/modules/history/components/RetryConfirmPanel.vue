@@ -28,8 +28,8 @@ defineEmits<{
   <div class="retry-confirm">
     <dl class="match-list">
       <div class="info-line">
-        <dt class="info-label">TMDB ID</dt>
-        <dd class="info-value">{{ match.tmdbId }}<span v-if="title" class="title-hint">{{ title }}</span></dd>
+        <dt class="info-label">{{ match.tmdbId < 0 ? 'AniList ID' : 'TMDB ID' }}</dt>
+        <dd class="info-value">{{ Math.abs(match.tmdbId) }}<span v-if="title" class="title-hint">{{ title }}</span></dd>
       </div>
       <div class="info-line">
         <dt class="info-label">季 / 集</dt>

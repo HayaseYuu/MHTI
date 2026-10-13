@@ -7,19 +7,20 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+from server.domain.artifacts.image_service import ImageService
+from server.domain.media.fingerprint_service import calculate_fingerprint
 from server.infrastructure.db import DATABASE_PATH
+from server.infrastructure.realtime import get_notifier
 from server.infrastructure.repositories.scrape_job_repository import ScrapeJobRepository
 from server.models.manual_job import ManualJobAdvancedSettings
+from server.models.organize import OrganizeMode
 from server.models.scrape_job import (
     ScrapeJob,
     ScrapeJobCreate,
     ScrapeJobSource,
     ScrapeJobStatus,
 )
-from server.models.organize import OrganizeMode
 from server.models.storage import StorageLocator
-from server.infrastructure.realtime import get_notifier
-from server.domain.media.fingerprint_service import calculate_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +55,7 @@ def build_timeout_step(step_name: str | None, timeout_seconds: int, elapsed: flo
 
     if step_name:
         first = ScrapeLogEntry(
-            message=(
-                f"超时节点: {step_name}"
-                "（超时前最后执行到的步骤，其已产出的记录保留）"
-            ),
+            message=(f"超时节点: {step_name}（超时前最后执行到的步骤，其已产出的记录保留）"),
             level=ScrapeLogLevel.ERROR,
         )
     else:
@@ -80,8 +78,7 @@ def build_timeout_step(step_name: str | None, timeout_seconds: int, elapsed: flo
             ),
             ScrapeLogEntry(
                 message=(
-                    f"本次已执行 {elapsed:.1f} 秒后中止；任务不会自动重试，"
-                    "需要手动执行「重试刮削」"
+                    f"本次已执行 {elapsed:.1f} 秒后中止；任务不会自动重试，需要手动执行「重试刮削」"
                 ),
                 level=ScrapeLogLevel.WARNING,
             ),
@@ -105,6 +102,7 @@ async def record_scrape_timeout(
     """
     logs.append(build_timeout_step(step_name, timeout_seconds, elapsed))
     await history_service.update_scrape_logs(record_id, logs)
+
 
 # 任务队列和并发控制
 _scrape_queue: asyncio.Queue[str] = asyncio.Queue()
@@ -158,7 +156,9 @@ class ScrapeJobService:
 
         return await self._repo.get_pending_file_paths()
 
-    async def create_job(self, job: ScrapeJobCreate, skip_duplicate_check: bool = False) -> ScrapeJob | None:
+    async def create_job(
+        self, job: ScrapeJobCreate, skip_duplicate_check: bool = False
+    ) -> ScrapeJob | None:
         """创建刮削任务并加入队列，如果已存在待处理任务则返回 None"""
         await self._ensure_db()
 
@@ -172,6 +172,8 @@ class ScrapeJobService:
         job_id = str(uuid.uuid4())[:8]
         now = datetime.now()
 
+        # 新任务显式保存默认表番模式，与旧版空设置区分。
+        job.advanced_settings = job.advanced_settings or ManualJobAdvancedSettings()
         # 序列化高级设置
         advanced_settings_json = None
         if job.advanced_settings is not None:
@@ -275,11 +277,14 @@ class ScrapeJobService:
         """转换数据库行到模型"""
         link_mode_value = row["link_mode"] if "link_mode" in row.keys() else None
 
-        # 反序列化高级设置
-        advanced_settings = None
+        # 原版没有 r18 字段且只处理成人；读取旧任务时保留原模式。
+        advanced_settings = ManualJobAdvancedSettings(r18=True)
         if "advanced_settings" in row.keys() and row["advanced_settings"]:
             try:
                 settings_data = json.loads(row["advanced_settings"])
+                if not isinstance(settings_data, dict):
+                    raise ValueError("任务设置必须是对象")
+                settings_data.setdefault("r18", True)
                 advanced_settings = ManualJobAdvancedSettings(**settings_data)
             except (json.JSONDecodeError, ValueError):
                 pass  # 解析失败则使用 None
@@ -374,12 +379,17 @@ async def _scrape_worker() -> None:
 
 async def _execute_scrape_job(service: ScrapeJobService, job_id: str) -> None:
     """执行单个刮削任务"""
-    from server.bootstrap import get_scraper_service
     from server.application.history_service import HistoryService, build_record_folder_path
     from server.application.scraped_file_service import ScrapedFileService
+    from server.bootstrap import get_scraper_service
     from server.domain.system.config_service import ConfigService
+    from server.models.history import (
+        HistoryConflictType,
+        HistoryRecordCreate,
+        TaskSource,
+        TaskStatus,
+    )
     from server.models.scraper import ScrapeRequest, ScrapeStatus
-    from server.models.history import HistoryRecordCreate, TaskStatus, HistoryConflictType, TaskSource
 
     job = await service.get_job(job_id)
     if job is None:
@@ -423,21 +433,29 @@ async def _execute_scrape_job(service: ScrapeJobService, job_id: str) -> None:
     file_fingerprint = calculate_fingerprint(job.file_path)
 
     # 创建历史记录
-    history_record = await history_service.create_record(HistoryRecordCreate(
-        task_name=task_name,
-        folder_path=job.file_path,
-        status=TaskStatus.RUNNING,
-        source=task_source,
-        total_files=1,
-        success_count=0,
-        failed_count=0,
-        duration_seconds=0,
-        started_at=started_at,  # 供前端实时计时（executed_at 是记录创建时间，重跑时不等同于本次开始）
-        scrape_job_id=job_id,
-        # 关联手动任务 ID，便于按任务聚合查询历史记录
-        manual_job_id=job.source_id if job.source == ScrapeJobSource.MANUAL else None,
-        file_fingerprint=file_fingerprint,
-    ))
+    history_record = await history_service.create_record(
+        HistoryRecordCreate(
+            task_name=task_name,
+            folder_path=job.file_path,
+            status=TaskStatus.RUNNING,
+            source=task_source,
+            total_files=1,
+            success_count=0,
+            failed_count=0,
+            duration_seconds=0,
+            # 重跑时 executed_at 是旧的创建时间，计时须使用本次 started_at。
+            started_at=started_at,
+            scrape_job_id=job_id,
+            # 关联手动任务 ID，便于按任务聚合查询历史记录
+            manual_job_id=job.source_id if job.source == ScrapeJobSource.MANUAL else None,
+            file_fingerprint=file_fingerprint,
+            conflict_data={
+                "advanced_settings": (
+                    job.advanced_settings or ManualJobAdvancedSettings()
+                ).model_dump()
+            },
+        )
+    )
     record_id = history_record.id
 
     # 更新任务关联的历史记录ID
@@ -493,25 +511,42 @@ async def _execute_scrape_job(service: ScrapeJobService, job_id: str) -> None:
             episode = result.episode_info
             await history_service.update_record_on_success(
                 record_id,
-                folder_path=build_record_folder_path(job.file_path, result.dest_path or job.output_dir),
+                folder_path=build_record_folder_path(
+                    job.file_path, result.dest_path or job.output_dir
+                ),
                 duration_seconds=file_duration,
                 title=series.name if series else None,
                 original_title=series.original_name if series else None,
                 plot=series.overview if series else None,
-                poster_url=f"https://image.tmdb.org/t/p/w500{series.poster_path}" if series and series.poster_path else None,
-                release_date=str(series.first_air_date) if series and series.first_air_date else None,
+                poster_url=ImageService.get_full_image_url(series.poster_path) if series else None,
+                release_date=str(series.first_air_date)
+                if series and series.first_air_date
+                else None,
                 rating=series.vote_average if series else None,
                 tags=series.genres if series else None,
                 season_number=result.parsed_season,
                 episode_number=result.parsed_episode,
                 episode_title=episode.name if episode else None,
                 episode_overview=episode.overview if episode else None,
-                episode_still_url=f"https://image.tmdb.org/t/p/w500{episode.still_path}" if episode and episode.still_path else None,
+                episode_still_url=ImageService.get_full_image_url(episode.still_path)
+                if episode
+                else None,
                 episode_air_date=str(episode.air_date) if episode and episode.air_date else None,
             )
 
+            await history_service.update_record(
+                record_id,
+                tmdb_id=result.selected_id,
+                conflict_data={
+                    "advanced_settings": (
+                        job.advanced_settings or ManualJobAdvancedSettings()
+                    ).model_dump(),
+                    "anilist_id": series.anilist_id if series else None,
+                },
+            )
+
             # 登记产物：scraped_files 是记录详情的「删除文件」与「重新整理」查找源文件的依据
-            # （设置页的「已刮削文件」面板已于 2026-09-27 移除）。此前只有重刮/重新整理的收尾会登记，
+            # 原扫描流程未登记，而重刮/重新整理的收尾已登记。
             # 扫描流程刮削的记录一条都没有，于是这两个功能对这些记录全都没数据可看。
             # 登记失败不影响刮削结果，故单独兜住异常。
             try:
@@ -533,18 +568,26 @@ async def _execute_scrape_job(service: ScrapeJobService, job_id: str) -> None:
                 finished_at=datetime.now(),
             )
             # 发送完成通知
-            await notifier.notify_completed(job_id, {
-                "status": "success",
-                "file_path": job.file_path,
-                "dest_path": result.dest_path,
-            })
+            await notifier.notify_completed(
+                job_id,
+                {
+                    "status": "success",
+                    "file_path": job.file_path,
+                    "dest_path": result.dest_path,
+                },
+            )
         elif result.status == ScrapeStatus.NEED_SELECTION:
             # 需要用户选择
             conflict_data = {
+                "advanced_settings": (
+                    job.advanced_settings or ManualJobAdvancedSettings()
+                ).model_dump(),
                 "output_dir": job.output_dir,
                 "metadata_dir": job.metadata_dir,
                 "link_mode": job.link_mode.value if job.link_mode else None,
-                "search_results": [r.model_dump(mode='json') for r in result.search_results] if result.search_results else [],
+                "search_results": [r.model_dump(mode="json") for r in result.search_results]
+                if result.search_results
+                else [],
                 "parsed_season": result.parsed_season,
                 "parsed_episode": result.parsed_episode,
             }
@@ -567,11 +610,16 @@ async def _execute_scrape_job(service: ScrapeJobService, job_id: str) -> None:
         elif result.status == ScrapeStatus.NEED_SEASON_EPISODE:
             # 需要输入季集
             conflict_data = {
+                "advanced_settings": (
+                    job.advanced_settings or ManualJobAdvancedSettings()
+                ).model_dump(),
                 "output_dir": job.output_dir,
                 "metadata_dir": job.metadata_dir,
                 "link_mode": job.link_mode.value if job.link_mode else None,
                 "tmdb_id": result.selected_id,
-                "series_info": result.series_info.model_dump(mode='json') if result.series_info else None,
+                "series_info": result.series_info.model_dump(mode="json")
+                if result.series_info
+                else None,
             }
             await history_service.update_record(
                 record_id,
@@ -592,6 +640,9 @@ async def _execute_scrape_job(service: ScrapeJobService, job_id: str) -> None:
         elif result.status == ScrapeStatus.FILE_CONFLICT:
             # 文件冲突
             conflict_data = {
+                "advanced_settings": (
+                    job.advanced_settings or ManualJobAdvancedSettings()
+                ).model_dump(),
                 "output_dir": job.output_dir,
                 "metadata_dir": job.metadata_dir,
                 "link_mode": job.link_mode.value if job.link_mode else None,
@@ -616,7 +667,11 @@ async def _execute_scrape_job(service: ScrapeJobService, job_id: str) -> None:
             )
             # 发送需要用户操作通知
             await notifier.notify_need_action(job_id, "file_conflict", conflict_data)
-        elif result.status in (ScrapeStatus.NO_MATCH, ScrapeStatus.SEARCH_FAILED, ScrapeStatus.API_FAILED):
+        elif result.status in (
+            ScrapeStatus.NO_MATCH,
+            ScrapeStatus.SEARCH_FAILED,
+            ScrapeStatus.API_FAILED,
+        ):
             # 需要手动输入 TMDB ID
             conflict_type_map = {
                 ScrapeStatus.NO_MATCH: HistoryConflictType.NO_MATCH,
@@ -624,6 +679,9 @@ async def _execute_scrape_job(service: ScrapeJobService, job_id: str) -> None:
                 ScrapeStatus.API_FAILED: HistoryConflictType.API_FAILED,
             }
             conflict_data = {
+                "advanced_settings": (
+                    job.advanced_settings or ManualJobAdvancedSettings()
+                ).model_dump(),
                 "output_dir": job.output_dir,
                 "metadata_dir": job.metadata_dir,
                 "link_mode": job.link_mode.value if job.link_mode else None,
@@ -650,15 +708,22 @@ async def _execute_scrape_job(service: ScrapeJobService, job_id: str) -> None:
         elif result.status == ScrapeStatus.EMBY_CONFLICT:
             # Emby 冲突
             conflict_data = {
+                "advanced_settings": (
+                    job.advanced_settings or ManualJobAdvancedSettings()
+                ).model_dump(),
                 "output_dir": job.output_dir,
                 "metadata_dir": job.metadata_dir,
                 "link_mode": job.link_mode.value if job.link_mode else None,
                 "tmdb_id": result.selected_id,
                 "season": result.parsed_season,
                 "episode": result.parsed_episode,
-                "series_info": result.series_info.model_dump(mode='json') if result.series_info else None,
+                "series_info": result.series_info.model_dump(mode="json")
+                if result.series_info
+                else None,
                 "emby_message": result.message,
-                "emby_conflict": result.emby_conflict.model_dump(mode='json') if result.emby_conflict else None,
+                "emby_conflict": result.emby_conflict.model_dump(mode="json")
+                if result.emby_conflict
+                else None,
             }
             await history_service.update_record(
                 record_id,

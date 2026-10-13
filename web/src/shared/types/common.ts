@@ -345,6 +345,8 @@ export interface SystemConfig {
 // ============================================================================
 
 export interface TMDBSearchResult {
+  metadata_source?: 'tmdb' | 'anilist'
+  anilist_id?: number
   id: number
   name: string
   original_name: string | null
@@ -384,6 +386,9 @@ export interface TMDBSeason {
 }
 
 export interface TMDBSeries {
+  metadata_source?: 'tmdb' | 'anilist'
+  anilist_id?: number
+  adult: boolean
   id: number
   name: string
   original_name: string | null

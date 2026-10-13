@@ -58,7 +58,7 @@ const emit = defineEmits<{
       <NButton
         size="small"
         :disabled="busy"
-        aria-label="按 TMDB ID 重刮"
+        aria-label="按元数据 ID 重刮"
         @click="emit('rescape')"
       >
         重刮

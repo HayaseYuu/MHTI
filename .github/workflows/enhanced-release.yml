@@ -1,0 +1,89 @@
+name: Enhanced Source Release
+
+on:
+  push:
+    branches: [main]
+    paths: [VERSION]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: enhanced-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-and-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: 安装后端测试依赖
+        run: pip install -r requirements.txt pytest pytest-asyncio pytest-timeout
+      - name: 后端测试（失败即阻止发布）
+        run: pytest server/tests --timeout=60 --timeout-method=thread -q
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: 前端类型检查及构建
+        working-directory: web
+        run: |
+          npm ci
+          npm run test:unit
+          npm run build:check
+      - name: 版本校验与打包
+        run: |
+          VERSION=$(cat VERSION)
+          test "$VERSION" = "1.0.0"
+          python - <<'PY'
+          import json, tomllib
+          version = open('VERSION').read().strip()
+          assert tomllib.load(open('pyproject.toml', 'rb'))['tool']['poetry']['version'] == version
+          assert json.load(open('web/package.json'))['version'] == version
+          PY
+          mkdir release-files
+          git archive --format=zip --prefix="mhti-$VERSION/" -o "release-files/mhti-source-$VERSION.zip" HEAD
+          (cd web && zip -rq "../release-files/mhti-frontend-$VERSION.zip" dist)
+          (cd release-files && sha256sum *.zip > SHA256SUMS.txt)
+          cp RELEASE_NOTES_1.0.0.md release-files/
+      - uses: actions/upload-artifact@v5
+        with:
+          name: enhanced-release
+          path: release-files/
+          retention-days: 14
+  publish:
+    needs: verify-and-package
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          name: enhanced-release
+          path: release-files
+      - name: 发布 1.0.0
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          VERSION=$(cat VERSION)
+          test "$VERSION" = "1.0.0"
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "同名 Release 已存在，不覆盖已有资产。"
+            exit 1
+          fi
+          gh release create "v$VERSION" --target "$GITHUB_SHA" \
+            --title "MHTI 增强版 $VERSION" \
+            --notes-file release-files/RELEASE_NOTES_1.0.0.md \
+            release-files/*.zip release-files/SHA256SUMS.txt

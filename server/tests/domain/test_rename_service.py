@@ -1,19 +1,20 @@
 """Unit tests for RenameService."""
 
-import pytest
 import tempfile
 from datetime import date
 from pathlib import Path
 from unittest.mock import AsyncMock
 
-from server.models.template import NamingTemplate
-from server.domain.system.config_service import ConfigService
+import pytest
+
 from server.domain.artifacts.rename_service import RenameService
+from server.domain.system.config_service import ConfigService
 from server.domain.system.template_service import TemplateService
 from server.models.organize import OrganizeMode
-from server.models.rename import RenameRequest, BatchRenameRequest
+from server.models.rename import BatchRenameRequest, RenameRequest
 from server.models.scraper import ScrapeByIdRequest, ScrapeStatus
 from server.models.storage import StorageLocator, StorageProvider
+from server.models.template import NamingTemplate
 from server.models.tmdb import TMDBEpisode, TMDBSeason, TMDBSeries
 
 
@@ -422,6 +423,8 @@ class Test115OutputBranches:
             subtitle_service=None,
             emby_service=None,
         )
+        # 本用例只验证整理流程，不访问远端动画补全服务。
+        monkeypatch.setattr(service, "anime_metadata_service", service.tmdb_service)
         monkeypatch.setattr(service, "_get_storage_provider", lambda provider_name: provider)
 
         file_locator = self._build_locator(
@@ -484,6 +487,8 @@ class Test115OutputBranches:
             subtitle_service=None,
             emby_service=None,
         )
+        # 本用例只验证整理流程，不访问远端动画补全服务。
+        monkeypatch.setattr(service, "anime_metadata_service", service.tmdb_service)
         monkeypatch.setattr(service, "_get_storage_provider", lambda provider_name: provider)
 
         file_locator = self._build_locator(
@@ -570,6 +575,8 @@ class Test115OutputBranches:
             subtitle_service=None,
             emby_service=None,
         )
+        # 本用例只验证整理流程，不访问远端动画补全服务。
+        monkeypatch.setattr(service, "anime_metadata_service", service.tmdb_service)
         monkeypatch.setattr(service, "_get_storage_provider", lambda provider_name: provider)
         monkeypatch.setattr(service, "_generate_episode_nfo", lambda *args, **kwargs: "<episode />")
         monkeypatch.setattr(

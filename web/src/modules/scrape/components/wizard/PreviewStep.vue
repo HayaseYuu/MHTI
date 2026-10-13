@@ -21,6 +21,7 @@ const props = defineProps<{
     metadata_dir: string
     link_mode: LinkMode
     delete_empty_parent: boolean
+    r18: boolean
   }
   advancedSettings: ManualJobAdvancedSettings | null
   previewFiles: DirectoryEntry[]

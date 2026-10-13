@@ -21,6 +21,7 @@ import {
   NThing,
 } from 'naive-ui'
 import { SearchOutline } from '@vicons/ionicons5'
+import MetadataSourceBadge from '@/shared/components/business/MetadataSourceBadge.vue'
 import type { TMDBSearchResult } from '@/shared/types/common'
 import { useTmdbDisplay } from '@/modules/history/hooks/useTmdbDisplay'
 
@@ -46,7 +47,7 @@ const { getImageUrl, getYear } = useTmdbDisplay()
   <NModal
     :show="show"
     preset="card"
-    title="搜索 TMDB"
+    title="搜索剧集"
     style="width: 600px; max-width: 95vw"
     :bordered="false"
     :segmented="{ content: true }"
@@ -70,7 +71,7 @@ const { getImageUrl, getYear } = useTmdbDisplay()
 
       <NSpin :show="searching">
         <div style="min-height: 200px; max-height: 400px; overflow-y: auto">
-          <NEmpty v-if="hasSearched && results.length === 0" description="未找到成人内容匹配结果" />
+          <NEmpty v-if="hasSearched && results.length === 0" description="未找到匹配结果" />
           <NList v-else-if="results.length > 0" hoverable clickable>
             <NListItem v-for="item in results" :key="item.id" @click="emit('select', item)">
               <NThing>
@@ -87,6 +88,7 @@ const { getImageUrl, getYear } = useTmdbDisplay()
                 </template>
                 <template #header>
                   {{ item.name }}
+                  <MetadataSourceBadge :item="item" />
                   <NTag v-if="item.first_air_date" size="small" style="margin-left: 8px">
                     {{ getYear(item.first_air_date) }}
                   </NTag>

@@ -3,11 +3,16 @@
 从 api/history.py 下沉，路由只做协议转换与校验。
 """
 
-from datetime import date, datetime
 import logging
+from datetime import date, datetime
 
 from fastapi import HTTPException
 
+from server.application.history_service import HistoryService, build_record_folder_path
+from server.application.rescrape_source import RescrapeInput, RescrapeSource
+from server.application.scrape_job_service import ScrapeJobService
+from server.application.scraped_file_service import ScrapedFileService
+from server.domain.artifacts.image_service import ImageService
 from server.models.history import (
     HistoryRecord,
     HistoryRecordDetail,
@@ -17,11 +22,7 @@ from server.models.history import (
     TaskStatus,
 )
 from server.models.scraper import ScrapeByIdRequest
-from server.models.tmdb import TMDBEpisode, TMDBSeries, TMDBSeason
-from server.application.history_service import HistoryService, build_record_folder_path
-from server.application.rescrape_source import RescrapeInput, RescrapeSource
-from server.application.scrape_job_service import ScrapeJobService
-from server.application.scraped_file_service import ScrapedFileService
+from server.models.tmdb import TMDBEpisode, TMDBSeason, TMDBSeries
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +32,11 @@ _TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/"
 
 def _to_tmdb_path(url: str | None) -> str | None:
     """把存档的完整图片地址还原成 TMDB path（形如 /abc.jpg）。"""
-    if not url or not url.startswith(_TMDB_IMAGE_BASE):
+    if not url:
         return None
-    rest = url[len(_TMDB_IMAGE_BASE):]
+    if not url.startswith(_TMDB_IMAGE_BASE):
+        return ImageService.get_full_image_url(url)
+    rest = url[len(_TMDB_IMAGE_BASE) :]
     # 去掉尺寸段（w500 / original / w300 …）
     return rest.split("/", 1)[1] if "/" in rest else None
 
@@ -75,7 +78,9 @@ def rebuild_metadata(
     )
     series = TMDBSeries(
         id=tmdb_id,
-        name=record.title or f"TMDB {tmdb_id}",
+        metadata_source="anilist" if tmdb_id < 0 else "tmdb",
+        anilist_id=(-tmdb_id if tmdb_id < 0 else getattr(record, "anilist_id", None)),
+        name=record.title or (f"AniList {-tmdb_id}" if tmdb_id < 0 else f"TMDB {tmdb_id}"),
         original_name=record.original_title,
         overview=record.plot,
         first_air_date=_to_date(record.release_date),
@@ -116,11 +121,7 @@ class HistoryScrapeActions:
         """
         if not record.scrape_job_id:
             return
-        if (
-            scrape_request.output_dir
-            and scrape_request.metadata_dir
-            and scrape_request.link_mode
-        ):
+        if scrape_request.output_dir and scrape_request.metadata_dir and scrape_request.link_mode:
             return
 
         try:
@@ -170,9 +171,7 @@ class HistoryScrapeActions:
         if input_.staged_from:
             keep.add(input_.staged_from)
         deleted = await resolver.clear_products(record.id, keep_paths=keep)
-        cleanup_logs = [
-            ScrapeLogEntry(message=f"已删除旧产物: {path}") for path in deleted
-        ]
+        cleanup_logs = [ScrapeLogEntry(message=f"已删除旧产物: {path}") for path in deleted]
         if not cleanup_logs:
             cleanup_logs.append(ScrapeLogEntry(message="没有需要清理的旧产物"))
         steps.append(ScrapeLogStep(name="清理旧产物", completed=True, logs=cleanup_logs))
@@ -242,6 +241,7 @@ class HistoryScrapeActions:
                 "output_locator": job.output_locator,
                 "metadata_locator": job.metadata_locator,
                 "allow_local_output": job.allow_local_output,
+                "advanced_settings": job.advanced_settings or record.advanced_settings,
             }
             # 只保留非空值
             return {k: v for k, v in result.items() if v is not None and v is not False}
@@ -270,6 +270,8 @@ class HistoryScrapeActions:
 
         # 获取原有日志和 manual_job_id
         record = await history_service.get_record(record_id)
+        if record is not None:
+            scrape_request.advanced_settings = record.advanced_settings
         existing_logs = list(record.scrape_logs) if record and record.scrape_logs else []
         manual_job_id = record.manual_job_id if record else None
 
@@ -280,7 +282,9 @@ class HistoryScrapeActions:
         if resolve_input and record is not None:
             remote = bool(getattr(scrape_request, "file_locator", None))
             await self.fill_organize_params(record, scrape_request)
-            prepared, prepared_steps, registration_source = await self.prepare_input(record, remote=remote)
+            prepared, prepared_steps, registration_source = await self.prepare_input(
+                record, remote=remote
+            )
             scrape_request.file_path = prepared.path
             existing_logs.extend(prepared_steps)
             await history_service.update_scrape_logs(record_id, existing_logs)
@@ -369,7 +373,7 @@ class HistoryScrapeActions:
 
         # 源文件路径与 TMDB ID 都取自登记表，缺失时退回记录自身
         files = await self._scraped_file_service.list_by_history_record(record_id)
-        tmdb_id = next((item.tmdb_id for item in files if item.tmdb_id), None)
+        tmdb_id = record.tmdb_id or next((item.tmdb_id for item in files if item.tmdb_id), None)
         if tmdb_id is None and record.conflict_data:
             tmdb_id = record.conflict_data.get("tmdb_id")
         if tmdb_id is None:
@@ -472,8 +476,17 @@ class HistoryScrapeActions:
         if result.status.value == "success":
             series = result.series_info
             episode = result.episode_info
+            previous = await history_service.get_record(record_id)
+            context = dict(previous.conflict_data or {}) if previous else {}
+            context["anilist_id"] = series.anilist_id if series else None
+            context["tmdb_id"] = result.selected_id
+            context.pop("series_info", None)
+            context.pop("search_results", None)
             await history_service.update_record(
                 record_id,
+                conflict_data=context,
+                tmdb_id=result.selected_id,
+                replace_metadata=True,
                 status=TaskStatus.SUCCESS,
                 # 空串而不是 None：update_fields 把 None 解释成「字段不修改」，
                 # 传 None 会让上一次失败的错误信息挂在「成功」记录上
@@ -481,15 +494,19 @@ class HistoryScrapeActions:
                 title=series.name if series else None,
                 original_title=series.original_name if series else None,
                 plot=series.overview if series else None,
-                poster_url=f"https://image.tmdb.org/t/p/w500{series.poster_path}" if series and series.poster_path else None,
-                release_date=str(series.first_air_date) if series and series.first_air_date else None,
+                poster_url=ImageService.get_full_image_url(series.poster_path) if series else None,
+                release_date=str(series.first_air_date)
+                if series and series.first_air_date
+                else None,
                 rating=series.vote_average if series else None,
                 tags=series.genres if series else None,
                 season_number=result.parsed_season,
                 episode_number=result.parsed_episode,
                 episode_title=episode.name if episode else None,
                 episode_overview=episode.overview if episode else None,
-                episode_still_url=f"https://image.tmdb.org/t/p/w500{episode.still_path}" if episode and episode.still_path else None,
+                episode_still_url=ImageService.get_full_image_url(episode.still_path)
+                if episode
+                else None,
                 episode_air_date=str(episode.air_date) if episode and episode.air_date else None,
                 # 重刮/重新整理也要写回真实耗时（此前后端只在任务流里写，重刮记录永远是旧值）
                 duration_seconds=duration_seconds,

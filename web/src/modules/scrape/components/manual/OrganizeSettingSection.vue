@@ -19,6 +19,7 @@ defineProps<{
   configReuseOptions: SelectMixedOption[]
   involvesP115: boolean
   allowLocalOutput: boolean
+  r18: boolean
 }>()
 
 const emit = defineEmits<{
@@ -26,6 +27,7 @@ const emit = defineEmits<{
   'update:deleteEmptyParent': [value: boolean]
   'update:configReuseId': [value: number]
   'update:allowLocalOutput': [value: boolean]
+  'update:r18': [value: boolean]
 }>()
 </script>
 
@@ -35,6 +37,16 @@ const emit = defineEmits<{
       <NIcon :component="SettingsOutline" :size="16" />
       <span>整理设置</span>
     </div>
+
+    <NFormItem label="R18" class="mode-item">
+      <div class="switch-row">
+        <NSwitch :value="r18" aria-label="R18 成人剧集模式" @update:value="emit('update:r18', $event)" />
+        <span class="switch-label">{{ r18 ? '成人剧集 · TMDB' : '表番 · TMDB + AniList' }}</span>
+      </div>
+      <template #feedback>
+        <span class="form-hint">关闭使用 TMDB + AniList 表番，开启使用 TMDB 成人剧集</span>
+      </template>
+    </NFormItem>
 
     <NFormItem label="整理模式">
       <NSelect
@@ -95,6 +107,10 @@ const emit = defineEmits<{
 
 .section-title .n-icon {
   color: var(--brand-500);
+}
+
+.mode-item {
+  margin-bottom: 12px;
 }
 
 .switch-row {

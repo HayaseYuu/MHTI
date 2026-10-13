@@ -100,7 +100,7 @@ const emit = defineEmits<{
           size="tiny"
           quaternary
           :disabled="busy"
-          :aria-label="`按 TMDB ID 重刮 #${record.display_id}`"
+          :aria-label="`按元数据 ID 重刮 #${record.display_id}`"
           @click="emit('rescape')"
         >
           重刮

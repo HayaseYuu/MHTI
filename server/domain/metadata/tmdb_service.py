@@ -10,6 +10,7 @@ from server.common.exceptions import (
     TMDBNotFoundError,
     TMDBTimeoutError,
 )
+from server.domain.system.config_service import ConfigService
 from server.models.config import ApiTokenStatus
 from server.models.tmdb import (
     TMDBEpisode,
@@ -18,7 +19,6 @@ from server.models.tmdb import (
     TMDBSeason,
     TMDBSeries,
 )
-from server.domain.system.config_service import ConfigService
 
 TMDB_BASE_URL = "https://www.themoviedb.org"
 TMDB_API_BASE_URL = "https://api.themoviedb.org/3"
@@ -381,6 +381,7 @@ class TMDBService:
         self,
         query: str,
         language: str | None = None,
+        include_adult: bool = True,
     ) -> TMDBSearchResponse:
         """
         Search TV series using TMDB API.
@@ -398,7 +399,7 @@ class TMDBService:
         try:
             response = await self._make_api_request(
                 "/search/tv",
-                params={"query": query, "language": language, "include_adult": "true"},
+                params={"query": query, "language": language, "include_adult": str(include_adult).lower()},
             )
 
             if response.status_code != 200:
@@ -425,6 +426,7 @@ class TMDBService:
                         overview=item.get("overview"),
                         vote_average=item.get("vote_average"),
                         adult=item.get("adult", False),
+                        genre_ids=item.get("genre_ids", []),
                     )
                 )
 
@@ -495,6 +497,8 @@ class TMDBService:
 
         return TMDBSeries(
             id=data["id"],
+            adult=data.get("adult", False),
+            genre_ids=[g["id"] for g in data.get("genres", []) if "id" in g],
             name=data.get("name", ""),
             original_name=data.get("original_name"),
             overview=data.get("overview"),

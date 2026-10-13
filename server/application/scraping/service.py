@@ -14,8 +14,24 @@ from tempfile import TemporaryDirectory
 
 import httpx
 
+from server.application.scraping.config_resolver import ScraperConfigResolver
+from server.application.scraping.media_pipeline import ScraperMediaPipeline
+from server.application.scraping.metadata_resolver import ScraperMetadataResolver
+from server.application.scraping.output_writer import OutputWriter, _get_mode_name
+from server.application.scraping.p115_storage_provider import P115StorageProvider
+from server.common.exceptions import TMDBError
+from server.domain.artifacts.image_service import ImageService
+from server.domain.artifacts.nfo_service import NFOService
+from server.domain.artifacts.rename_service import RenameService
+from server.domain.artifacts.subtitle_service import SubtitleService
+from server.domain.integration.emby_service import EmbyService
+from server.domain.metadata.anilist_service import AniListError
+from server.domain.metadata.anime_metadata_service import AnimeMetadataService
+from server.domain.metadata.tmdb_service import TMDBService
+from server.domain.parsing.parser_service import ParserService
+from server.domain.system.config_service import ConfigService
 from server.models.emby import ConflictCheckResult, ConflictType
-from server.models.history import ScrapeLogLevel, ScrapeLogEntry, ScrapeLogStep
+from server.models.history import ScrapeLogEntry, ScrapeLogLevel, ScrapeLogStep
 from server.models.manual_job import ManualJobAdvancedSettings
 from server.models.nfo import SeasonNFO
 from server.models.organize import OrganizeMode
@@ -31,19 +47,6 @@ from server.models.scraper import (
 )
 from server.models.storage import StorageLocator, StorageProvider
 from server.models.tmdb import TMDBSearchResult, TMDBSeason, TMDBSeries
-from server.domain.system.config_service import ConfigService
-from server.domain.integration.emby_service import EmbyService
-from server.domain.artifacts.image_service import ImageService
-from server.domain.artifacts.nfo_service import NFOService
-from server.domain.parsing.parser_service import ParserService
-from server.domain.artifacts.rename_service import RenameService
-from server.application.scraping.config_resolver import ScraperConfigResolver
-from server.application.scraping.media_pipeline import ScraperMediaPipeline
-from server.application.scraping.metadata_resolver import ScraperMetadataResolver
-from server.application.scraping.output_writer import OutputWriter, _get_mode_name
-from server.application.scraping.p115_storage_provider import P115StorageProvider
-from server.domain.artifacts.subtitle_service import SubtitleService
-from server.domain.metadata.tmdb_service import TMDBService
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +89,7 @@ class ScraperService:
         """
         self.config_service = config_service
         self.tmdb_service = tmdb_service
+        self.anime_metadata_service = AnimeMetadataService(tmdb_service, config_service)
         self.parser_service = parser_service
         self.nfo_service = nfo_service
         self.rename_service = rename_service
@@ -100,14 +104,14 @@ class ScraperService:
 
     # ---- 配置检查与有效配置（转发到 ScraperConfigResolver，保持原方法面）----
 
-    async def check_config(self) -> tuple[bool, str | None]:
-        return await self._config_resolver.check_config()
+    async def check_config(self, r18: bool = False) -> tuple[bool, str | None]:
+        return await self._config_resolver.check_config(r18)
 
-    async def ensure_config_ready(self) -> None:
-        await self._config_resolver.ensure_config_ready()
+    async def ensure_config_ready(self, r18: bool = False) -> None:
+        await self._config_resolver.ensure_config_ready(r18)
 
-    async def ensure_api_token_ready(self) -> None:
-        await self._config_resolver.ensure_api_token_ready()
+    async def ensure_api_token_ready(self, r18: bool = False) -> None:
+        await self._config_resolver.ensure_api_token_ready(r18)
 
     async def _get_effective_download_config(
         self,
@@ -126,8 +130,9 @@ class ScraperService:
     async def _enrich_search_results(
         self,
         results: list[TMDBSearchResult],
+        metadata_service: TMDBService | AnimeMetadataService | None = None,
     ) -> list[TMDBSearchResult]:
-        return await self._metadata_resolver.enrich_search_results(results)
+        return await self._metadata_resolver.enrich_search_results(results, metadata_service)
 
     def _select_best_match(
         self,
@@ -218,6 +223,9 @@ class ScraperService:
 
         返回 (修正后的季号, 修正说明或 None)。
         """
+        # AniList 的续作是独立作品，不能把文件中的 S02 静默改为 S01。
+        if series.metadata_source == "anilist":
+            return requested_season, None
         real_seasons = sorted(
             s.season_number for s in series.seasons if s.season_number > 0
         )
@@ -595,7 +603,7 @@ class ScraperService:
         await notify_log_update()
         return result
 
-    async def preview(self, file_path: str) -> ScrapePreview:
+    async def preview(self, file_path: str, r18: bool = False) -> ScrapePreview:
         """Preview scrape operation without executing.
 
         Args:
@@ -616,12 +624,13 @@ class ScraperService:
             parsed_episode=parsed.episode,
         )
 
-        # Search TMDB if we have a title
+        provider = self.tmdb_service if r18 else self.anime_metadata_service
+        # Search metadata if we have a title
         if parsed.series_name:
             try:
-                search_response = await self.tmdb_service.search_series_by_api(parsed.series_name)
-                preview.search_results = search_response.results
-            except (httpx.TimeoutException, httpx.RequestError):
+                search_response = await provider.search_series_by_api(parsed.series_name)
+                preview.search_results = [item for item in search_response.results if item.adult == r18]
+            except (httpx.TimeoutException, httpx.RequestError, TMDBError, AniListError):
                 pass
 
         return preview
@@ -651,6 +660,10 @@ class ScraperService:
         Returns:
             ScrapeResult with operation status and details.
         """
+        r18 = bool(request.advanced_settings and request.advanced_settings.r18)
+        provider = self.tmdb_service if r18 else self.anime_metadata_service
+        source_label = "TMDB（R18）" if r18 else "TMDB + AniList（表番）"
+        content_label = "成人剧集" if r18 else "表番"
         file_path = request.file_path
         path = Path(file_path)
         scrape_logs: list[ScrapeLogStep] = []
@@ -701,66 +714,74 @@ class ScraperService:
         await notify_log_update()
 
         # Step 2: Search TMDB using API
-        search_step = ScrapeLogStep(name="搜索 TMDB", logs=[])
+        search_step = ScrapeLogStep(name=f"搜索 {source_label}", logs=[])
         search_step.logs.append(ScrapeLogEntry(message=f"搜索关键词: {parsed.series_name}"))
         scrape_logs.append(search_step)
         await notify_log_update()
 
         try:
-            search_response = await self.tmdb_service.search_series_by_api(parsed.series_name)
-            # 只保留成人内容
-            adult_results = [r for r in search_response.results if r.adult]
-            result.search_results = adult_results
-            search_step.logs.append(ScrapeLogEntry(message=f"找到 {len(adult_results)} 个匹配结果"))
+            search_response = await provider.search_series_by_api(parsed.series_name)
+            # 按当前任务模式隔离内容，避免人工重试改变来源。
+            matching_results = [r for r in search_response.results if r.adult == r18]
+            result.search_results = matching_results
+            search_step.logs.append(ScrapeLogEntry(message=f"找到 {len(matching_results)} 个匹配结果"))
             await notify_log_update()
         except httpx.TimeoutException:
-            search_step.logs.append(ScrapeLogEntry(message="TMDB 搜索超时", level=ScrapeLogLevel.ERROR))
+            search_step.logs.append(ScrapeLogEntry(message="元数据搜索超时", level=ScrapeLogLevel.ERROR))
             search_step.completed = False
             await notify_log_update()
             result.status = ScrapeStatus.SEARCH_FAILED
-            result.message = "TMDB 搜索超时，请检查网络或 Cookie"
+            result.message = "元数据搜索超时，请检查网络"
             result.scrape_logs = scrape_logs
             return result
         except httpx.RequestError as e:
-            search_step.logs.append(ScrapeLogEntry(message=f"TMDB 搜索失败: {str(e)}", level=ScrapeLogLevel.ERROR))
+            search_step.logs.append(ScrapeLogEntry(message=f"元数据搜索失败: {str(e)}", level=ScrapeLogLevel.ERROR))
             search_step.completed = False
             await notify_log_update()
             result.status = ScrapeStatus.SEARCH_FAILED
-            result.message = f"TMDB 搜索失败: {str(e)}"
+            result.message = f"元数据搜索失败: {str(e)}"
+            result.scrape_logs = scrape_logs
+            return result
+        except (ValueError, TMDBError, AniListError) as exc:
+            search_step.logs.append(ScrapeLogEntry(message=f"元数据搜索失败: {exc}", level=ScrapeLogLevel.ERROR))
+            search_step.completed = False
+            await notify_log_update()
+            result.status = ScrapeStatus.SEARCH_FAILED
+            result.message = f"元数据搜索失败: {exc}"
             result.scrape_logs = scrape_logs
             return result
 
-        if not adult_results:
-            search_step.logs.append(ScrapeLogEntry(message="未找到匹配的成人剧集", level=ScrapeLogLevel.WARNING))
+        if not matching_results:
+            search_step.logs.append(ScrapeLogEntry(message=f"未找到匹配的{content_label}", level=ScrapeLogLevel.WARNING))
             search_step.completed = False
             await notify_log_update()
             result.status = ScrapeStatus.NO_MATCH
-            result.message = f"未找到匹配的成人剧集: {parsed.series_name}"
+            result.message = f"未找到匹配的{content_label}: {parsed.series_name}"
             result.scrape_logs = scrape_logs
             return result
 
         # Step 3: Select match
-        result.search_results = adult_results
+        result.search_results = matching_results
 
-        if request.auto_select and len(adult_results) == 1:
+        if request.auto_select and len(matching_results) == 1:
             # 只有一个结果时自动选择
-            selected = adult_results[0]
+            selected = matching_results[0]
             result.selected_id = selected.id
-        elif request.auto_select and len(adult_results) > 1:
+        elif request.auto_select and len(matching_results) > 1:
             # 多个结果时需要用户选择，先获取每个结果的详情
             search_step.logs.append(ScrapeLogEntry(message="获取各剧集详情..."))
             await notify_log_update()
-            enriched_results = await self._enrich_search_results(adult_results)
+            enriched_results = await self._enrich_search_results(matching_results, provider)
             result.search_results = enriched_results
             result.status = ScrapeStatus.NEED_SELECTION
-            result.message = f"找到 {len(adult_results)} 个匹配结果，请手动选择"
+            result.message = f"找到 {len(matching_results)} 个匹配结果，请手动选择"
             result.scrape_logs = scrape_logs
             return result
         else:
             # Return results for manual selection
             search_step.logs.append(ScrapeLogEntry(message="获取各剧集详情..."))
             await notify_log_update()
-            enriched_results = await self._enrich_search_results(adult_results)
+            enriched_results = await self._enrich_search_results(matching_results, provider)
             result.search_results = enriched_results
             result.status = ScrapeStatus.NEED_SELECTION
             result.message = "请手动选择匹配的剧集"
@@ -769,12 +790,12 @@ class ScraperService:
 
         # Step 4: Get details via API
         detail_step = ScrapeLogStep(name="获取详情", logs=[])
-        detail_step.logs.append(ScrapeLogEntry(message=f"获取剧集详情: TMDB ID {result.selected_id}"))
+        detail_step.logs.append(ScrapeLogEntry(message=f"获取剧集详情: {source_label} ID {result.selected_id}"))
         scrape_logs.append(detail_step)
         await notify_log_update()
 
         try:
-            series = await self.tmdb_service.get_series_by_api(result.selected_id)
+            series = await provider.get_series_by_api(result.selected_id)
             if series is None:
                 detail_step.logs.append(ScrapeLogEntry(message="无法获取剧集详情", level=ScrapeLogLevel.ERROR))
                 detail_step.completed = False
@@ -783,10 +804,12 @@ class ScraperService:
                 result.message = f"无法获取剧集详情: ID {result.selected_id}"
                 result.scrape_logs = scrape_logs
                 return result
+            if series.adult != r18:
+                raise ValueError("所选剧集与任务内容模式不一致，请重新选择")
             result.series_info = series
-            detail_step.logs.append(ScrapeLogEntry(message=f"剧集名称: {series.name}"))
+            detail_step.logs.append(ScrapeLogEntry(message=f"剧集名称: {series.name}；来源: {'AniList' if series.metadata_source == 'anilist' else 'TMDB'}"))
             await notify_log_update()
-        except ValueError as e:
+        except (ValueError, TMDBError, AniListError) as e:
             detail_step.logs.append(ScrapeLogEntry(message=str(e), level=ScrapeLogLevel.ERROR))
             detail_step.completed = False
             await notify_log_update()
@@ -823,7 +846,7 @@ class ScraperService:
                 result.series_info = series
                 season_num = parsed.season if parsed.season is not None else 1
                 try:
-                    season_detail = await self.tmdb_service.get_season_by_api(
+                    season_detail = await provider.get_season_by_api(
                         result.selected_id, season_num
                     )
                     # 更新 series 中对应季的 episodes 信息
@@ -866,7 +889,7 @@ class ScraperService:
         # Step 5: Get season details (for episode info)
         season_info = None
         try:
-            season_info = await self.tmdb_service.get_season_by_api(
+            season_info = await provider.get_season_by_api(
                 result.selected_id, season_num
             )
             logger.info(f"获取季度详情: Season {season_num}, 共 {len(season_info.episodes) if season_info and season_info.episodes else 0} 集")
@@ -888,9 +911,9 @@ class ScraperService:
         if not season_exists or not episode_exists:
             reasons = []
             if not season_exists:
-                reasons.append(f"TMDB 中不存在第 {season_num} 季")
+                reasons.append(f"元数据源中不存在第 {season_num} 季")
             if season_exists and not episode_exists:
-                reasons.append(f"TMDB 第 {season_num} 季中不存在第 {episode_num} 集")
+                reasons.append(f"元数据源第 {season_num} 季中不存在第 {episode_num} 集")
             reason_text = "，".join(reasons)
             verify_step.logs.append(ScrapeLogEntry(
                 message=f"核验失败: {reason_text}", level=ScrapeLogLevel.WARNING,
@@ -908,7 +931,7 @@ class ScraperService:
             return result
 
         verify_step.logs.append(ScrapeLogEntry(
-            message=f"核验通过: S{season_num:02d}E{episode_num:02d} 存在于 TMDB"
+            message=f"核验通过: S{season_num:02d}E{episode_num:02d} 存在于元数据源"
         ))
         await notify_log_update()
         # 到这里 TMDB ID 与季/集才算定下来（之后只剩生成与搬运），落库后即使超时/失败，
@@ -1003,6 +1026,9 @@ class ScraperService:
         Returns:
             ScrapeResult with operation status.
         """
+        r18 = bool(request.advanced_settings and request.advanced_settings.r18)
+        provider = self.tmdb_service if r18 else self.anime_metadata_service
+        source_label = "TMDB（R18）" if r18 else "TMDB + AniList（表番）"
         file_path = request.file_path
         path = Path(file_path)
         scrape_logs: list[ScrapeLogStep] = []
@@ -1029,12 +1055,14 @@ class ScraperService:
 
         # Step 1: 获取剧集详情
         detail_step = ScrapeLogStep(name="获取详情", logs=[])
-        detail_step.logs.append(ScrapeLogEntry(message=f"TMDB ID: {request.tmdb_id}, S{request.season:02d}E{request.episode:02d}"))
+        detail_step.logs.append(ScrapeLogEntry(message=f"{source_label} ID: {request.tmdb_id}, S{request.season:02d}E{request.episode:02d}"))
         scrape_logs.append(detail_step)
         await notify_log_update()
 
         try:
-            series = await self.tmdb_service.get_series_by_api(request.tmdb_id)
+            if r18 and request.tmdb_id <= 0:
+                raise ValueError("R18 模式不支持 AniList ID，请选择 TMDB 成人剧集")
+            series = await provider.get_series_by_api(request.tmdb_id)
             if series is None:
                 detail_step.logs.append(ScrapeLogEntry(message="无法获取剧集详情", level=ScrapeLogLevel.ERROR))
                 detail_step.completed = False
@@ -1043,10 +1071,12 @@ class ScraperService:
                 result.message = f"无法获取剧集详情: ID {request.tmdb_id}"
                 result.scrape_logs = scrape_logs
                 return result
+            if series.adult != r18:
+                raise ValueError("所选剧集与任务内容模式不一致，请重新选择")
             result.series_info = series
-            detail_step.logs.append(ScrapeLogEntry(message=f"剧集名称: {series.name}"))
+            detail_step.logs.append(ScrapeLogEntry(message=f"剧集名称: {series.name}；来源: {'AniList' if series.metadata_source == 'anilist' else 'TMDB'}"))
             await notify_log_update()
-        except ValueError as e:
+        except (ValueError, TMDBError, AniListError) as e:
             detail_step.logs.append(ScrapeLogEntry(message=str(e), level=ScrapeLogLevel.ERROR))
             detail_step.completed = False
             await notify_log_update()
@@ -1066,7 +1096,7 @@ class ScraperService:
         # Get season details (for episode info)
         season_info = None
         try:
-            season_info = await self.tmdb_service.get_season_by_api(
+            season_info = await provider.get_season_by_api(
                 request.tmdb_id, request.season
             )
             detail_step.logs.append(ScrapeLogEntry(message=f"获取季度详情: 共 {len(season_info.episodes) if season_info and season_info.episodes else 0} 集"))
@@ -1084,9 +1114,9 @@ class ScraperService:
         if not season_exists or not episode_exists:
             reasons = []
             if not season_exists:
-                reasons.append(f"TMDB 中不存在第 {request.season} 季")
+                reasons.append(f"元数据源中不存在第 {request.season} 季")
             if season_exists and not episode_exists:
-                reasons.append(f"TMDB 第 {request.season} 季中不存在第 {request.episode} 集")
+                reasons.append(f"元数据源第 {request.season} 季中不存在第 {request.episode} 集")
             reason_text = "，".join(reasons)
             detail_step.logs.append(ScrapeLogEntry(
                 message=f"核验失败: {reason_text}", level=ScrapeLogLevel.WARNING,
@@ -1102,7 +1132,7 @@ class ScraperService:
             return result
 
         detail_step.logs.append(ScrapeLogEntry(
-            message=f"核验通过: S{request.season:02d}E{request.episode:02d} 存在于 TMDB"
+            message=f"核验通过: S{request.season:02d}E{request.episode:02d} 存在于元数据源"
         ))
         await notify_log_update()
 
@@ -1250,7 +1280,8 @@ class ScraperService:
         for file_path in request.file_paths:
             if request.dry_run:
                 # Preview only
-                preview = await self.preview(file_path)
+                r18 = bool(request.advanced_settings and request.advanced_settings.r18)
+                preview = await self.preview(file_path, r18=r18)
                 results.append(
                     ScrapeResult(
                         file_path=file_path,
@@ -1266,6 +1297,7 @@ class ScraperService:
                     file_path=file_path,
                     output_dir=request.output_dir,
                     auto_select=request.auto_select,
+                    advanced_settings=request.advanced_settings,
                 )
                 result = await self.scrape_file(scrape_request)
                 results.append(result)

@@ -26,6 +26,7 @@ const props = defineProps<{
     metadata_dir: string
     link_mode: LinkMode
     delete_empty_parent: boolean
+    r18: boolean
   }
   advancedSettings: ManualJobAdvancedSettings | null
 }>()
@@ -62,6 +63,11 @@ const linkModeLabel = computed(
           <NIcon :component="DocumentOutline" />
           <span>{{ formData.metadata_dir }}</span>
         </div>
+      </NDescriptionsItem>
+      <NDescriptionsItem label="刮削模式">
+        <NTag :type="formData.r18 ? 'warning' : 'info'" size="small" round>
+          {{ formData.r18 ? 'R18 · TMDB' : '表番 · TMDB + AniList' }}
+        </NTag>
       </NDescriptionsItem>
       <NDescriptionsItem label="整理模式">
         <NTag type="info" size="small" round>
