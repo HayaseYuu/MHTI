@@ -87,3 +87,10 @@ jobs:
             --title "MHTI 增强版 $VERSION" \
             --notes-file release-files/RELEASE_NOTES_1.0.0.md \
             release-files/*.zip release-files/SHA256SUMS.txt
+  docker-assets:
+    needs: publish
+    uses: ./.github/workflows/docker-release.yml
+    permissions:
+      contents: write
+    with:
+      tag: v1.0.0

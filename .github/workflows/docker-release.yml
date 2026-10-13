@@ -1,0 +1,167 @@
+name: Docker Release Assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '已发布版本标签，如 v1.0.0'
+        required: true
+        default: v1.0.0
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Docker ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    steps:
+      - name: 校验版本标签
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag }}
+      - name: 校验源码版本及正式发布状态
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          test "$(cat VERSION)" = "${RELEASE_TAG#v}"
+          gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' | grep -qx false
+          echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
+          echo "SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@v4
+      - name: 原生构建并加载镜像
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: mhti:${{ env.VERSION }}
+          labels: |
+            org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=mhti-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=mhti-${{ matrix.arch }}
+      - name: 镜像架构、依赖和启动验收
+        env:
+          IMAGE_ARCH: ${{ matrix.arch }}
+        run: |
+          IMAGE="mhti:$VERSION"
+          test "$(docker image inspect --format '{{.Architecture}}' "$IMAGE")" = "$IMAGE_ARCH"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$IMAGE")" = "$VERSION"
+          docker run --rm --entrypoint python "$IMAGE" -m pip check
+          docker run --rm --entrypoint python "$IMAGE" -c \
+            'import p115client; from concurrenttools import threadpool_map; from server.domain.metadata.anilist_service import AniListService; from server.domain.metadata.anime_metadata_service import AnimeMetadataService'
+          docker run -d --name mhti-smoke -p 127.0.0.1:18000:8000 "$IMAGE"
+          trap 'docker logs mhti-smoke; docker rm -f mhti-smoke' EXIT
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18000/health > /tmp/health.json; then
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:18000/health > /tmp/health.json
+          curl -fsS http://127.0.0.1:18000/health/ready > /tmp/ready.json
+          curl -fsS http://127.0.0.1:18000/api/config/frontend > /tmp/frontend.json
+          curl -fsS http://127.0.0.1:18000/ | grep -q '<div id="app">'
+          python - <<'PY'
+          import json, os
+          health = json.load(open('/tmp/health.json'))
+          assert health['status'] == 'healthy'
+          assert health['checks']['database'] == 'healthy'
+          assert json.load(open('/tmp/ready.json'))['status'] == 'ready'
+          assert json.load(open('/tmp/frontend.json'))['version'] == os.environ['VERSION']
+          PY
+      - name: 导出可离线加载的镜像
+        env:
+          IMAGE_ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p docker-assets
+          docker save "mhti:$VERSION" | gzip -1 > "docker-assets/mhti-$VERSION-$IMAGE_ARCH.tar.gz"
+          gzip -t "docker-assets/mhti-$VERSION-$IMAGE_ARCH.tar.gz"
+          (cd docker-assets && sha256sum *.tar.gz > "SHA256SUMS-$IMAGE_ARCH.txt")
+      - uses: actions/upload-artifact@v5
+        with:
+          name: docker-${{ matrix.arch }}
+          path: docker-assets/
+          compression-level: 0
+          retention-days: 7
+
+  attach:
+    name: 补齐 Release 镜像与校验文件
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: docker-*
+          merge-multiple: true
+          path: docker-assets
+      - name: 附加镜像及使用说明
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          mkdir original-assets
+          gh release download "$RELEASE_TAG" --pattern SHA256SUMS.txt --dir original-assets
+          cat original-assets/SHA256SUMS.txt docker-assets/SHA256SUMS-*.txt > docker-assets/SHA256SUMS.txt
+          # 不覆盖已有镜像，避免同名版本的构建被意外替换。
+          gh release upload "$RELEASE_TAG" docker-assets/*.tar.gz
+          gh release upload "$RELEASE_TAG" docker-assets/SHA256SUMS.txt --clobber
+          gh release view "$RELEASE_TAG" --json body --jq .body > release-body.md
+          if ! grep -q '### Docker 镜像下载与加载' release-body.md; then
+            cat >> release-body.md <<EOF
+
+          ### Docker 镜像下载与加载
+
+          本发布已包含 **AMD64** 和 **ARM64** 原生构建、启动验收通过的 Docker 镜像。
+          镜像从标签 `$RELEASE_TAG` 的源码构建，镜像名称为 `mhti:$VERSION`，无需 Docker Hub 登录。
+
+          - Intel / AMD：`mhti-$VERSION-amd64.tar.gz`
+          - Apple Silicon / ARM64：`mhti-$VERSION-arm64.tar.gz`
+
+          选择与你部署主机对应的架构包，校验后加载：
+
+          \`\`\`bash
+          # 以下示例为 AMD64；ARM64 主机请替换文件名中的架构。
+          sha256sum -c SHA256SUMS.txt --ignore-missing
+          gzip -dc mhti-$VERSION-amd64.tar.gz | docker load
+          docker run -d --name mhti -p 8000:8000 \\
+            -v "\$PWD/data:/app/data" -v /path/to/media:/media \\
+            -e TZ=Asia/Shanghai mhti:$VERSION
+          \`\`\`
+
+          无需挂载源码或单独部署前端。镜像内包含 Caddy、前端和后端。
+          EOF
+            gh release edit "$RELEASE_TAG" --notes-file release-body.md
+          fi
