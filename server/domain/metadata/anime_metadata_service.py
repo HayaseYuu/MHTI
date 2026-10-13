@@ -4,6 +4,7 @@ import asyncio
 import logging
 import unicodedata
 
+from server.common.exceptions import TMDBNotConfiguredError
 from server.domain.metadata.anilist_service import AniListService
 from server.domain.metadata.tmdb_service import TMDBService
 from server.models.tmdb import TMDBSearchResponse, TMDBSearchResult, TMDBSeason, TMDBSeries
@@ -87,7 +88,13 @@ class AnimeMetadataService:
             for media in media_list
             if media["id"] not in used
         )
-        return TMDBSearchResponse(query=query, total_results=len(results), results=results)
+        # 未配置 TMDB 是允许的 AniList 单源模式；网络/鉴权/限流异常则禁止 AI 补猜。
+        complete = not isinstance(anime, Exception) and (
+            not isinstance(tmdb, Exception) or isinstance(tmdb, TMDBNotConfiguredError)
+        )
+        return TMDBSearchResponse(
+            query=query, total_results=len(results), results=results, search_complete=complete
+        )
 
     async def get_series_by_api(
         self,

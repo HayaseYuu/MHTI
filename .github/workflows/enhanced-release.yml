@@ -17,6 +17,8 @@ jobs:
   verify-and-package:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -41,20 +43,23 @@ jobs:
           npm run test:unit
           npm run build:check
       - name: 版本校验与打包
+        id: version
         run: |
           VERSION=$(cat VERSION)
-          test "$VERSION" = "1.0.0"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           python - <<'PY'
           import json, tomllib
           version = open('VERSION').read().strip()
           assert tomllib.load(open('pyproject.toml', 'rb'))['tool']['poetry']['version'] == version
           assert json.load(open('web/package.json'))['version'] == version
           PY
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          test -f "RELEASE_NOTES_$VERSION.md"
           mkdir release-files
           git archive --format=zip --prefix="mhti-$VERSION/" -o "release-files/mhti-source-$VERSION.zip" HEAD
           (cd web && zip -rq "../release-files/mhti-frontend-$VERSION.zip" dist)
           (cd release-files && sha256sum *.zip > SHA256SUMS.txt)
-          cp RELEASE_NOTES_1.0.0.md release-files/
+          cp "RELEASE_NOTES_$VERSION.md" release-files/
       - uses: actions/upload-artifact@v5
         with:
           name: enhanced-release
@@ -72,25 +77,25 @@ jobs:
         with:
           name: enhanced-release
           path: release-files
-      - name: 发布 1.0.0
+      - name: 发布正式版本
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
           VERSION=$(cat VERSION)
-          test "$VERSION" = "1.0.0"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           if gh release view "v$VERSION" >/dev/null 2>&1; then
             echo "同名 Release 已存在，不覆盖已有资产。"
             exit 1
           fi
           gh release create "v$VERSION" --target "$GITHUB_SHA" \
             --title "MHTI 增强版 $VERSION" \
-            --notes-file release-files/RELEASE_NOTES_1.0.0.md \
+            --notes-file "release-files/RELEASE_NOTES_$VERSION.md" \
             release-files/*.zip release-files/SHA256SUMS.txt
   docker-assets:
-    needs: publish
+    needs: [verify-and-package, publish]
     uses: ./.github/workflows/docker-release.yml
     permissions:
       contents: write
     with:
-      tag: v1.0.0
+      tag: ${{ needs.verify-and-package.outputs.tag }}

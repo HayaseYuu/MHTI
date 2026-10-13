@@ -1,16 +1,21 @@
 """Configuration API routes."""
 
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends
 
-from server.application.watching import WatcherConfigUseCase
-from server.api.deps import require_auth
 from server.api.deps import (
     get_config_service,
     get_p115_service,
     get_tmdb_service,
     get_watcher_service,
+    require_auth,
 )
+from server.application.watcher_service import WatcherService
+from server.application.watching import WatcherConfigUseCase
+from server.domain.integration.p115_service import P115Service
+from server.domain.metadata.tmdb_service import TMDBService
+from server.domain.system.config_service import ConfigService
+from server.models.ai import AIConfig, AIConfigRequest, AIConfigResponse
 from server.models.cloud_115 import (
     Cloud115AccountInfo,
     Cloud115QrSession,
@@ -18,6 +23,7 @@ from server.models.cloud_115 import (
     Cloud115Status,
 )
 from server.models.config import (
+    SUPPORTED_LANGUAGES,
     ApiTokenSaveRequest,
     ApiTokenSaveResponse,
     ApiTokenStatus,
@@ -28,23 +34,17 @@ from server.models.config import (
     ProxyConfigRequest,
     ProxyConfigResponse,
     ProxyTestResponse,
-    ProxyType,
-    SUPPORTED_LANGUAGES,
 )
-from server.models.organize import OrganizeConfig
 from server.models.download import DownloadConfig
+from server.models.nfo import NfoConfig
+from server.models.organize import OrganizeConfig
+from server.models.system import SystemConfig
 from server.models.template import NamingTemplate
 from server.models.watcher import (
     WatcherConfig,
     WatcherConfigRequest,
     WatcherConfigResponse,
 )
-from server.models.nfo import NfoConfig
-from server.models.system import SystemConfig
-from server.domain.system.config_service import ConfigService
-from server.domain.integration.p115_service import P115Service
-from server.domain.metadata.tmdb_service import TMDBService
-from server.application.watcher_service import WatcherService
 
 router = APIRouter(prefix="/api/config", tags=["config"], dependencies=[Depends(require_auth)])
 
@@ -429,3 +429,42 @@ async def delete_115_login(
     """Clear stored 115 login information."""
     await p115_service.clear_login_state()
     return {"success": True, "message": "115 登录信息已清除"}
+
+
+# ========== AI 辅助配置 ==========
+
+
+@router.get("/ai-assist", response_model=AIConfigResponse)
+async def get_ai_assist_config(
+    config_service: ConfigService = Depends(get_config_service),
+) -> AIConfigResponse:
+    config = await config_service.get_ai_config()
+    return AIConfigResponse(
+        **config.model_dump(), has_api_key=await config_service.has_ai_api_key()
+    )
+
+
+@router.put("/ai-assist", response_model=AIConfigResponse)
+async def save_ai_assist_config(
+    request: AIConfigRequest,
+    config_service: ConfigService = Depends(get_config_service),
+) -> AIConfigResponse:
+    api_key = request.api_key.get_secret_value().strip() if request.api_key else ""
+    if request.enabled and not api_key and not await config_service.has_ai_api_key():
+        raise HTTPException(status_code=400, detail="请先配置 DeepSeek API Key")
+    if api_key:
+        await config_service.save_ai_api_key(api_key)
+    config = AIConfig(**request.model_dump(exclude={"api_key"}))
+    await config_service.save_ai_config(config)
+    return AIConfigResponse(
+        **config.model_dump(), has_api_key=await config_service.has_ai_api_key()
+    )
+
+
+@router.delete("/ai-assist/api-key", response_model=AIConfigResponse)
+async def delete_ai_assist_api_key(
+    config_service: ConfigService = Depends(get_config_service),
+) -> AIConfigResponse:
+    await config_service.delete_ai_api_key()
+    config = await config_service.get_ai_config()
+    return AIConfigResponse(**config.model_dump(), has_api_key=False)

@@ -27,6 +27,7 @@ const props = defineProps<{
     link_mode: LinkMode
     delete_empty_parent: boolean
     r18: boolean
+    ai_assist: boolean
   }
   advancedSettings: ManualJobAdvancedSettings | null
 }>()
@@ -67,6 +68,11 @@ const linkModeLabel = computed(
       <NDescriptionsItem label="刮削模式">
         <NTag :type="formData.r18 ? 'warning' : 'info'" size="small" round>
           {{ formData.r18 ? 'R18 · TMDB' : '表番 · TMDB + AniList' }}
+        </NTag>
+      </NDescriptionsItem>
+      <NDescriptionsItem label="AI 兜底">
+        <NTag :type="formData.ai_assist ? 'info' : 'default'" size="small" round>
+          {{ formData.ai_assist ? '允许辅助 · 需全局启用与 Key' : '已禁用' }}
         </NTag>
       </NDescriptionsItem>
       <NDescriptionsItem label="整理模式">

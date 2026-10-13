@@ -1,14 +1,14 @@
 {
   "name": "mhti",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "build:check": "vue-tsc -b && vite build",
     "preview": "vite preview",
-    "test:unit": "tsc src/shared/utils/metadata.ts src/shared/utils/metadata.test.ts --module nodenext --target es2022 --types node --skipLibCheck --outDir .test-build && node --test .test-build/metadata.test.js"
+    "test:unit": "tsc src/shared/utils/metadata.ts src/shared/utils/metadata.test.ts src/shared/utils/aiAssist.ts src/shared/utils/aiAssist.test.ts --module nodenext --target es2022 --types node --skipLibCheck --outDir .test-build && node --test .test-build/*.test.js"
   },
   "dependencies": {
     "@vicons/ionicons5": "^0.13.0",

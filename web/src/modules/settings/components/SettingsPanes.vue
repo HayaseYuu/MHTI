@@ -7,6 +7,7 @@
  *
  * 单独拆出是因为 SettingsPage 同时承载页头、导航与分组元数据，超过 300 行上限。
  */
+import AiAssistSettings from '@/modules/settings/components/AiAssistSettings.vue'
 import OrganizeSettings from '@/modules/settings/components/OrganizeSettings.vue'
 import WatcherSettings from '@/modules/settings/components/WatcherSettings.vue'
 import DownloadSettings from '@/modules/settings/components/DownloadSettings.vue'
@@ -43,6 +44,9 @@ defineProps<{
       <LanguageSettings />
       <TemplateSettings />
     </template>
+  </section>
+  <section v-show="active === 'ai-assist'" class="pane" aria-label="AI 辅助">
+    <AiAssistSettings v-if="mounted.has('ai-assist')" />
   </section>
   <section v-show="active === 'network'" class="pane" aria-label="网络代理">
     <ProxySettings v-if="mounted.has('network')" />

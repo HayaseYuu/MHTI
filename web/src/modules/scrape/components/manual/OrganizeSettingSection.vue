@@ -20,6 +20,7 @@ defineProps<{
   involvesP115: boolean
   allowLocalOutput: boolean
   r18: boolean
+  aiAssist: boolean
 }>()
 
 const emit = defineEmits<{
@@ -28,6 +29,7 @@ const emit = defineEmits<{
   'update:configReuseId': [value: number]
   'update:allowLocalOutput': [value: boolean]
   'update:r18': [value: boolean]
+  'update:aiAssist': [value: boolean]
 }>()
 </script>
 
@@ -45,6 +47,16 @@ const emit = defineEmits<{
       </div>
       <template #feedback>
         <span class="form-hint">关闭使用 TMDB + AniList 表番，开启使用 TMDB 成人剧集</span>
+      </template>
+    </NFormItem>
+
+    <NFormItem label="AI 兜底" class="mode-item">
+      <div class="switch-row">
+        <NSwitch :value="aiAssist" aria-label="允许 AI 兜底" @update:value="emit('update:aiAssist', $event)" />
+        <span class="switch-label">{{ aiAssist ? '允许 AI 辅助识别' : '禁用 AI 辅助' }}</span>
+      </div>
+      <template #feedback>
+        <span class="form-hint">仅普通刮削失败或候选有歧义时辅助；全局未启用或未配 Key 时不调用</span>
       </template>
     </NFormItem>
 

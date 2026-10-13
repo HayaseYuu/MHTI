@@ -6,7 +6,7 @@ on:
       tag:
         description: '已发布版本标签，如 v1.0.0'
         required: true
-        default: v1.0.0
+        default: v1.1.0
         type: string
   workflow_call:
     inputs:

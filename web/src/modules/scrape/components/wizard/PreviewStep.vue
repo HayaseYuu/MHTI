@@ -22,6 +22,7 @@ const props = defineProps<{
     link_mode: LinkMode
     delete_empty_parent: boolean
     r18: boolean
+    ai_assist: boolean
   }
   advancedSettings: ManualJobAdvancedSettings | null
   previewFiles: DirectoryEntry[]

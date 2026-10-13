@@ -12,6 +12,7 @@ import MetadataTab from '@/modules/scrape/components/advanced/MetadataTab.vue'
 const props = defineProps<{
   show: boolean
   r18: boolean
+  aiAssist: boolean
   initialSettings?: ManualJobAdvancedSettings | null
 }>()
 
@@ -75,6 +76,7 @@ const handleConfirm = () => {
   emit('confirm', {
     ...formData.value,
     r18: props.r18,
+    ai_assist: props.aiAssist,
     use_global_organize: useGlobalOrganize.value,
     use_global_download: useGlobalDownload.value,
     use_global_naming: useGlobalNaming.value,

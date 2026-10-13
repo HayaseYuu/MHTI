@@ -5,11 +5,13 @@ import time
 from typing import Callable
 
 from fastapi import FastAPI, Request, Response
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from server.common.http import get_client_ip
 from server.common.exceptions import AppException, ErrorCode
+from server.common.http import get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +23,24 @@ def setup_exception_handlers(app: FastAPI) -> None:
     Args:
         app: FastAPI application instance
     """
+
+    @app.exception_handler(RequestValidationError)
+    async def safe_ai_validation_handler(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        # FastAPI 默认校验响应带 input，SecretStr 尚未解析时会泄露明文。
+        # 只对 AI 配置路由脱敏，其他接口维持 FastAPI 原始行为。
+        if not request.url.path.startswith("/api/config/ai-assist"):
+            return await request_validation_exception_handler(request, exc)
+        fields = {"enabled", "model", "timeout_seconds", "confidence_threshold", "api_key"}
+        details = []
+        for error in exc.errors():
+            loc = error.get("loc", ())
+            safe_loc = ["body"]
+            if len(loc) > 1 and loc[0] == "body" and loc[1] in fields:
+                safe_loc.append(loc[1])
+            details.append({"loc": safe_loc, "msg": "AI 辅助配置参数不合法"})
+        return JSONResponse(status_code=422, content={"detail": details})
 
     @app.exception_handler(AppException)
     async def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:

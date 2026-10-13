@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
+![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)
 ![Python](https://img.shields.io/badge/Python-3.12+-green.svg)
 ![Vue](https://img.shields.io/badge/Vue-3.5-brightgreen.svg)
 ![Node](https://img.shields.io/badge/Node-24-339933.svg)
@@ -19,6 +19,20 @@
 </div>
 
 ---
+
+## ✨ 1.1.0：AI 兜底辅助
+
+普通刮削优先；AI 只在无法识别番名、搜索无匹配或多个候选无法确定时提供建议。
+AI 不能生成元数据、编造 ID、决定季集或直接整理文件；最终由 TMDB / AniList 普通流程核验。
+
+- 在设置中的「AI 辅助」配置 DeepSeek Key 并启用，模型固定 `deepseek-flash`。
+- 默认全局关闭；创建任务的配置选项可单独禁用 AI。
+- 普通成功零模型请求；预览、人工选择/指定 ID、网络/认证故障、季集或文件冲突不调用 AI。
+- 每个文件最多两次建议，低置信度或模型失败继续人工处理，不无限重试。
+- 只向模型发送文件名和必要候选信息，不发送视频、字幕、完整路径或其他服务凭据。
+- API Key 加密保存，不向前端回显。启用后模型请求可能收费。
+
+详见 [1.1.0 发布说明](RELEASE_NOTES_1.1.0.md)。
 
 ## ✨ 增强版 1.0.0：表番 / R18 双模式
 

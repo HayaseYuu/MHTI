@@ -5,17 +5,18 @@ from datetime import datetime
 from pathlib import Path
 
 from server.infrastructure.db import DATABASE_PATH
-from server.infrastructure.security import decrypt, encrypt
 from server.infrastructure.repositories.config_repository import ConfigRepository
-from server.models.config import LanguageConfig, ProxyConfig, ProxyType, ApiTokenStatus
+from server.infrastructure.security import decrypt, encrypt
+from server.models.ai import AIConfig
 from server.models.cloud_115 import Cloud115Config
-from server.models.emby import EmbyConfig
-from server.models.organize import OrganizeConfig, OrganizeMode
+from server.models.config import ApiTokenStatus, LanguageConfig, ProxyConfig, ProxyType
 from server.models.download import DownloadConfig
+from server.models.emby import EmbyConfig
+from server.models.nfo import NfoConfig
+from server.models.organize import OrganizeConfig, OrganizeMode
+from server.models.system import SystemConfig
 from server.models.template import NamingTemplate
 from server.models.watcher import WatcherConfig, WatcherMode
-from server.models.nfo import NfoConfig
-from server.models.system import SystemConfig
 
 # Config keys
 COOKIE_KEY = "tmdb_cookie"
@@ -37,6 +38,8 @@ SYSTEM_CONFIG_KEY = "system_config"
 EMBY_CONFIG_KEY = "emby_config"
 NAMING_CONFIG_KEY = "naming_config"
 CLOUD_115_CONFIG_KEY = "cloud_115_config"
+AI_CONFIG_KEY = "ai_assist_config"
+AI_API_KEY = "ai_assist_api_key"
 
 
 class ConfigService:
@@ -235,7 +238,7 @@ class ConfigService:
         await self.set(ADULT_CHECKED_AT_KEY, datetime.now().isoformat())
 
     async def get_adult_status(self) -> tuple[bool | None, str | None, datetime | None]:
-        """读 R18 探测结论：无记录时 enabled 为 None、时间也为 None（区分「未检测」与「检测后无法判定」）。"""
+        """读 R18 探测结论；无记录时时间为 None，以区分未检测与无法判定。"""
         enabled_str = await self.get(ADULT_ENABLED_KEY)
         message = await self.get(ADULT_MESSAGE_KEY)
         checked_at_str = await self.get(ADULT_CHECKED_AT_KEY)
@@ -456,3 +459,32 @@ class ConfigService:
     async def delete_115_config(self) -> bool:
         """Delete 115 cloud configuration."""
         return await self.delete(CLOUD_115_CONFIG_KEY)
+
+    # AI 辅助配置：普通配置与密钥分别存储，复用现有加密 KV。
+    async def get_ai_config(self) -> AIConfig:
+        value = await self.get(AI_CONFIG_KEY)
+        if value is not None:
+            try:
+                return AIConfig.model_validate_json(value)
+            except ValueError:
+                pass
+        return AIConfig()
+
+    async def save_ai_config(self, config: AIConfig) -> None:
+        # 显式白名单，避免传入 Request 子类时把 api_key 写入普通 JSON。
+        safe = AIConfig(**config.model_dump(include=set(AIConfig.model_fields)))
+        await self.set(AI_CONFIG_KEY, safe.model_dump_json())
+
+    async def get_ai_api_key(self) -> str | None:
+        return await self.get(AI_API_KEY, encrypted=True)
+
+    async def save_ai_api_key(self, api_key: str) -> None:
+        await self.set(AI_API_KEY, api_key, encrypted=True)
+
+    async def has_ai_api_key(self) -> bool:
+        return bool(await self.get_ai_api_key())
+
+    async def delete_ai_api_key(self) -> bool:
+        config = await self.get_ai_config()
+        await self.save_ai_config(config.model_copy(update={"enabled": False}))
+        return await self.delete(AI_API_KEY)

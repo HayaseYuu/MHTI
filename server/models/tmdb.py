@@ -31,6 +31,8 @@ class TMDBSearchResponse(BaseModel):
     query: str
     total_results: int
     results: list[TMDBSearchResult]
+    # 数据源请求故障不等同于名称没找到，不能因此触发 AI。
+    search_complete: bool = True
 
 
 class TMDBEpisode(BaseModel):

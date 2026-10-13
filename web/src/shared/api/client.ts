@@ -217,7 +217,8 @@ api.interceptors.response.use(
 
     // 其他错误处理
     const message = (error.response?.data as { detail?: string })?.detail || error.message || '请求失败'
-    console.error('[API] 请求错误:', message)
+    // AI 配置可能包含新 Key，避免打印服务端错误中可能回显的敏感内容。
+    console.error('[API] 请求错误:', originalRequest?.url?.includes('/config/ai-assist') ? 'AI 配置请求失败' : message)
     return Promise.reject(error)
   }
 )

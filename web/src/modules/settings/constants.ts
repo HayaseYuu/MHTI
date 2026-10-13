@@ -19,6 +19,7 @@ export type SectionKey =
   | 'watcher'
   | 'download'
   | 'naming'
+  | 'ai-assist'
   | 'network'
   | 'nfo'
   | 'cloud115'
@@ -43,6 +44,7 @@ export const SETTINGS_SECTIONS: SettingsSectionMeta[] = [
   { key: 'watcher', label: '目录监控', description: '监控目录的扫描方式与入库时机' },
   { key: 'download', label: '下载', description: '海报、剧照与元数据的下载范围' },
   { key: 'naming', label: '命名与语言', description: '元数据语言、文件名模板与重命名规则' },
+  { key: 'ai-assist', label: 'AI 辅助', description: '普通刮削无法处理时的名称识别与候选消歧' },
   { key: 'nfo', label: 'NFO 元数据', description: '生成的 NFO 字段与图片类型', group: '集成' },
   { key: 'network', label: '网络代理', description: '刮削与下载请求是否走代理' },
   { key: 'cloud115', label: '115 网盘', description: '115 登录状态与在线处理开关' },

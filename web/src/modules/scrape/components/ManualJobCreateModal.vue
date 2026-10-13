@@ -106,6 +106,7 @@ onMounted(() => {
             v-model:delete-empty-parent="formData.delete_empty_parent"
             v-model:allow-local-output="allowLocalOutput"
             v-model:r18="formData.r18"
+          v-model:ai-assist="formData.ai_assist"
             :config-reuse-id="formData.config_reuse_id"
             :link-mode-options="linkModeOptions"
             :show-move-options="showMoveOptions"
@@ -133,6 +134,7 @@ onMounted(() => {
   <AdvancedSettingsModal
     v-model:show="showAdvancedSettings"
     :r18="formData.r18"
+    :ai-assist="formData.ai_assist"
     :initial-settings="advancedSettings"
     @confirm="handleAdvancedSettingsConfirm"
   />

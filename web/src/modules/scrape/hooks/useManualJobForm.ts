@@ -1,4 +1,5 @@
 import { ref, computed, watch } from 'vue'
+import { mergeTaskAssistSettings } from '@/shared/utils/aiAssist'
 import { useMessage } from 'naive-ui'
 import { manualJobApi } from '@/modules/scrape/api'
 import { LinkMode } from '@/modules/scrape/types'
@@ -41,6 +42,7 @@ export function useManualJobForm(options: {
     delete_empty_parent: boolean
     config_reuse_id: number | null
     r18: boolean
+    ai_assist: boolean
   }
 
   const formData = ref<ManualJobFormData>({
@@ -51,6 +53,7 @@ export function useManualJobForm(options: {
     delete_empty_parent: true,
     config_reuse_id: null,
     r18: false,
+    ai_assist: true,
   })
 
   const scanLocator = ref<StorageLocator | null>(null)
@@ -82,6 +85,7 @@ export function useManualJobForm(options: {
       delete_empty_parent: true,
       config_reuse_id: null,
       r18: false,
+    ai_assist: true,
     }
     advancedSettings.value = null
     scanLocator.value = null
@@ -121,7 +125,7 @@ export function useManualJobForm(options: {
         delete_empty_parent: formData.value.delete_empty_parent,
         config_reuse_id: formData.value.config_reuse_id,
         // 模式始终提交，未打开高级设置也不会丢失 R18 选择。
-        advanced_settings: { ...advancedSettings.value, r18: formData.value.r18 },
+        advanced_settings: mergeTaskAssistSettings(advancedSettings.value ?? {}, formData.value.r18, formData.value.ai_assist),
       })
       options.onSuccess()
       handleClose()
@@ -169,9 +173,16 @@ export function useManualJobForm(options: {
     }
   })
 
+  // 只同步已有高级设置，不为开关制造默认高级配置；reset 后仍保持 null。
+  watch(() => [formData.value.r18, formData.value.ai_assist], () => {
+    if (advancedSettings.value) {
+      advancedSettings.value = mergeTaskAssistSettings(advancedSettings.value, formData.value.r18, formData.value.ai_assist)
+    }
+  }, { flush: 'sync' })
+
   // 高级设置确认
   const handleAdvancedSettingsConfirm = (settings: ManualJobAdvancedSettings) => {
-    advancedSettings.value = { ...settings, r18: formData.value.r18 }
+    advancedSettings.value = mergeTaskAssistSettings(settings, formData.value.r18, formData.value.ai_assist)
   }
 
   return {

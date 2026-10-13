@@ -25,11 +25,13 @@ from server.domain.artifacts.nfo_service import NFOService
 from server.domain.artifacts.rename_service import RenameService
 from server.domain.artifacts.subtitle_service import SubtitleService
 from server.domain.integration.emby_service import EmbyService
+from server.domain.metadata.ai_assist_service import AIAssistService
 from server.domain.metadata.anilist_service import AniListError
 from server.domain.metadata.anime_metadata_service import AnimeMetadataService
 from server.domain.metadata.tmdb_service import TMDBService
 from server.domain.parsing.parser_service import ParserService
 from server.domain.system.config_service import ConfigService
+from server.models.ai import AISuggestion
 from server.models.emby import ConflictCheckResult, ConflictType
 from server.models.history import ScrapeLogEntry, ScrapeLogLevel, ScrapeLogStep
 from server.models.manual_job import ManualJobAdvancedSettings
@@ -74,6 +76,7 @@ class ScraperService:
         image_service: ImageService,
         subtitle_service: SubtitleService,
         emby_service: EmbyService,
+        ai_assist_service: AIAssistService | None = None,
     ) -> None:
         """Initialize scraper service with explicit dependencies.
 
@@ -86,6 +89,7 @@ class ScraperService:
             image_service: Image download service instance.
             subtitle_service: Subtitle handling service instance.
             emby_service: Emby integration service instance.
+            ai_assist_service: Optional fallback adviser, never a metadata source.
         """
         self.config_service = config_service
         self.tmdb_service = tmdb_service
@@ -96,6 +100,9 @@ class ScraperService:
         self.image_service = image_service
         self.subtitle_service = subtitle_service
         self.emby_service = emby_service
+        self.ai_assist_service = (
+            ai_assist_service if ai_assist_service is not None else AIAssistService(config_service)
+        )
 
         self._config_resolver = ScraperConfigResolver(config_service, tmdb_service)
         self._metadata_resolver = ScraperMetadataResolver(tmdb_service, nfo_service)
@@ -678,6 +685,91 @@ class ScraperService:
             if on_match_resolved and result.selected_id:
                 await on_match_resolved(result.selected_id, season, episode)
 
+        # 每文件独立预算，避免并发任务共享标题、候选和重试状态。
+        ai_calls = 0
+        title_attempted = False
+        ai_allowed = request.auto_select and (
+            request.advanced_settings is None or request.advanced_settings.ai_assist
+        )
+
+        async def get_ai_suggestion(
+            action: str,
+            title: str | None = None,
+            candidates: list[TMDBSearchResult] | None = None,
+        ) -> AISuggestion | None:
+            nonlocal ai_calls
+            if not ai_allowed or ai_calls >= 2:
+                return None
+            try:
+                if not await self.ai_assist_service.is_enabled():
+                    return None
+            except Exception:
+                # AI 配置读取失败也不能中断普通刮削。
+                return None
+            ai_calls += 1
+            ai_step = ScrapeLogStep(name="AI 辅助识别", logs=[])
+            scrape_logs.append(ai_step)
+            try:
+                if action == "identify_title":
+                    suggestion = await self.ai_assist_service.identify_title(path.name, title)
+                else:
+                    suggestion = await self.ai_assist_service.select_candidate(
+                        path.name, title or "", candidates or []
+                    )
+                # 全 schema 复验；即使注入的客户端绕过字段校验，也不能提升权限。
+                if suggestion is not None:
+                    suggestion = AISuggestion.model_validate(suggestion.model_dump())
+                # 双重核验：不能信任模型输出，也不能跳过客户端以外的编排边界。
+                confidence = getattr(suggestion, "confidence", None)
+                if (
+                    suggestion is None
+                    or suggestion.action != action
+                    or type(confidence) not in (float, int)
+                    or not 0.8 <= confidence <= 1.0
+                ):
+                    suggestion = None
+                elif action == "identify_title":
+                    suggested_title = suggestion.title
+                    if (
+                        not isinstance(suggested_title, str)
+                        or not suggested_title.strip()
+                        or len(suggested_title) > 160
+                        or any(ord(char) < 32 for char in suggested_title)
+                    ):
+                        suggestion = None
+                    elif title and suggested_title.strip().casefold() == title.strip().casefold():
+                        suggestion = None
+                else:
+                    selected_id = suggestion.selected_id
+                    if (
+                        type(selected_id) is not int
+                        or selected_id == 0
+                        or not any(
+                            item.id == selected_id and item.adult == r18
+                            for item in candidates or []
+                        )
+                    ):
+                        suggestion = None
+            except Exception:
+                # 不输出外部错误内容，防止密钥、提示词或未可信 reason 混入日志。
+                suggestion = None
+            if suggestion is None:
+                ai_step.logs.append(
+                    ScrapeLogEntry(message="AI 建议未采用，保留普通刮削及人工处理路径")
+                )
+            elif action == "identify_title":
+                ai_step.logs.append(ScrapeLogEntry(message=(
+                    f"AI 建议搜索标题: {suggestion.title.strip()}"
+                    f"（置信度 {suggestion.confidence:.2f}）；交由原数据源验证"
+                )))
+            else:
+                ai_step.logs.append(ScrapeLogEntry(message=(
+                    f"AI 建议当前候选 ID {suggestion.selected_id}"
+                    f"（置信度 {suggestion.confidence:.2f}）；继续普通刮削核验"
+                )))
+            await notify_log_update()
+            return suggestion
+
         # Check file exists
         if not self._is_provider_source(request.file_locator) and not path.exists():
             return ScrapeResult(
@@ -689,7 +781,7 @@ class ScraperService:
         # Step 1: Parse filename
         parse_step = ScrapeLogStep(name="解析文件名", logs=[])
         parse_step.logs.append(ScrapeLogEntry(message=f"视频文件路径: {file_path}"))
-        parsed = self.parser_service.parse(path.name, file_path)
+        parsed = self.parser_service.parse(path.name, file_path).model_copy()
 
         result = ScrapeResult(
             file_path=file_path,
@@ -699,10 +791,18 @@ class ScraperService:
             parsed_episode=parsed.episode,
         )
 
+        scrape_logs.append(parse_step)
+        if not parsed.series_name:
+            # AI 只提出标题；季、集、年份始终沿用普通解析结果。
+            title_attempted = True
+            suggestion = await get_ai_suggestion("identify_title")
+            if suggestion:
+                parsed.series_name = suggestion.title.strip()
+                result.parsed_title = parsed.series_name
+
         if not parsed.series_name:
             parse_step.logs.append(ScrapeLogEntry(message="无法从文件名解析出剧集名称", level=ScrapeLogLevel.ERROR))
             parse_step.completed = False
-            scrape_logs.append(parse_step)
             await notify_log_update()
             result.status = ScrapeStatus.NO_MATCH
             result.message = "无法从文件名解析出剧集名称"
@@ -710,7 +810,6 @@ class ScraperService:
             return result
 
         parse_step.logs.append(ScrapeLogEntry(message=f"解析结果: {parsed.series_name} S{parsed.season or '?'}E{parsed.episode or '?'}"))
-        scrape_logs.append(parse_step)
         await notify_log_update()
 
         # Step 2: Search TMDB using API
@@ -723,6 +822,22 @@ class ScraperService:
             search_response = await provider.search_series_by_api(parsed.series_name)
             # 按当前任务模式隔离内容，避免人工重试改变来源。
             matching_results = [r for r in search_response.results if r.adult == r18]
+            if not matching_results and not search_response.search_complete:
+                raise ValueError("元数据源搜索不完整，请检查数据源连接后重试")
+            if not matching_results and not title_attempted:
+                # 只在成功搜索但没有本模式结果时纠正一次名称；网络和鉴权错误不走 AI。
+                title_attempted = True
+                suggestion = await get_ai_suggestion("identify_title", parsed.series_name)
+                if suggestion:
+                    parsed.series_name = suggestion.title.strip()
+                    result.parsed_title = parsed.series_name
+                    search_step.logs.append(ScrapeLogEntry(
+                        message=f"使用建议标题重新搜索: {parsed.series_name}"
+                    ))
+                    search_response = await provider.search_series_by_api(parsed.series_name)
+                    matching_results = [r for r in search_response.results if r.adult == r18]
+                    if not matching_results and not search_response.search_complete:
+                        raise ValueError("元数据源搜索不完整，请检查数据源连接后重试")
             result.search_results = matching_results
             search_step.logs.append(ScrapeLogEntry(message=f"找到 {len(matching_results)} 个匹配结果"))
             await notify_log_update()
@@ -768,15 +883,24 @@ class ScraperService:
             selected = matching_results[0]
             result.selected_id = selected.id
         elif request.auto_select and len(matching_results) > 1:
-            # 多个结果时需要用户选择，先获取每个结果的详情
-            search_step.logs.append(ScrapeLogEntry(message="获取各剧集详情..."))
-            await notify_log_update()
-            enriched_results = await self._enrich_search_results(matching_results, provider)
-            result.search_results = enriched_results
-            result.status = ScrapeStatus.NEED_SELECTION
-            result.message = f"找到 {len(matching_results)} 个匹配结果，请手动选择"
-            result.scrape_logs = scrape_logs
-            return result
+            # 部分数据源故障时，候选集不完整，不能让 AI 假定已看到全部结果。
+            suggestion = None
+            if search_response.search_complete:
+                suggestion = await get_ai_suggestion(
+                    "select_candidate", parsed.series_name, matching_results
+                )
+            if suggestion:
+                # ID 只能来自当前已过滤候选，AI 不能直接指定新的元数据来源。
+                result.selected_id = suggestion.selected_id
+            else:
+                search_step.logs.append(ScrapeLogEntry(message="获取各剧集详情..."))
+                await notify_log_update()
+                enriched_results = await self._enrich_search_results(matching_results, provider)
+                result.search_results = enriched_results
+                result.status = ScrapeStatus.NEED_SELECTION
+                result.message = f"找到 {len(matching_results)} 个匹配结果，请手动选择"
+                result.scrape_logs = scrape_logs
+                return result
         else:
             # Return results for manual selection
             search_step.logs.append(ScrapeLogEntry(message="获取各剧集详情..."))

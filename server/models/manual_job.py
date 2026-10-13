@@ -40,6 +40,9 @@ class ManualJobAdvancedSettings(BaseModel):
     # 内容模式独立于全局配置，默认使用表番双数据源。
     r18: bool = False
 
+    # 仅在普通识别无解时允许 AI 辅助；仍须全局启用且配置密钥。
+    ai_assist: bool = True
+
     # 各分类的全局配置开关
     use_global_organize: bool = True
     use_global_download: bool = True

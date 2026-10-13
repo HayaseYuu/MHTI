@@ -52,6 +52,8 @@ export interface ManualJobCreate {
 export interface ManualJobAdvancedSettings {
   /** 关闭时刮削表番，开启时仅匹配成人剧集 */
   r18: boolean
+  /** 仅许可 AI 兜底，全局未启用或缺少 Key 时不会调用 */
+  ai_assist: boolean
   // 各分类的全局配置开关
   use_global_organize: boolean
   use_global_download: boolean
@@ -90,7 +92,7 @@ export interface ManualJobAdvancedSettings {
 /** 高级设置表单数据：4 个分类开关由父组件单独持有，不在表单对象内 */
 export type AdvancedSettingsForm = Omit<
   ManualJobAdvancedSettings,
-  'r18' | 'use_global_organize' | 'use_global_download' | 'use_global_naming' | 'use_global_metadata'
+  'r18' | 'ai_assist' | 'use_global_organize' | 'use_global_download' | 'use_global_naming' | 'use_global_metadata'
 >
 
 export interface ManualJobListResponse {

@@ -5,7 +5,10 @@ from datetime import date, datetime
 import httpx
 
 from server.common.exceptions import (
+    ErrorCode,
     TMDBConnectionError,
+    TMDBError,
+    TMDBInvalidCredentialsError,
     TMDBNotConfiguredError,
     TMDBNotFoundError,
     TMDBTimeoutError,
@@ -402,8 +405,18 @@ class TMDBService:
                 params={"query": query, "language": language, "include_adult": str(include_adult).lower()},
             )
 
+            if response.status_code in (401, 403):
+                raise TMDBInvalidCredentialsError("API Token")
             if response.status_code != 200:
-                return TMDBSearchResponse(query=query, total_results=0, results=[])
+                # HTTP 故障不能伪装为零匹配，否则会误用 AI 并产生无意义费用。
+                error = TMDBError(
+                    f"TMDB 搜索请求失败（HTTP {response.status_code}）",
+                    ErrorCode.TMDB_RATE_LIMITED if response.status_code == 429
+                    else ErrorCode.TMDB_REQUEST_FAILED,
+                )
+                if response.status_code == 429:
+                    error.status_code = 429
+                raise error
 
             data = response.json()
             results = []
