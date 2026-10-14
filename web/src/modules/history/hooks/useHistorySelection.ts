@@ -24,7 +24,6 @@ export function useHistorySelection(options: {
     done,
     total,
     isSelectable,
-    needsManualCount,
     run,
     stop,
   } = useHistoryBatchRetry({
@@ -35,7 +34,9 @@ export function useHistorySelection(options: {
 
   /** 移动卡片勾选：卡片只知道自己的 id，集合在页面这层维护 */
   const toggle = (record: HistoryRecord, value: boolean) => {
+    if (running.value) return
     if (value) {
+      if (!isSelectable(record)) return
       if (!checkedKeys.value.includes(record.id)) checkedKeys.value = [...checkedKeys.value, record.id]
     } else {
       checkedKeys.value = checkedKeys.value.filter((id) => id !== record.id)
@@ -44,15 +45,12 @@ export function useHistorySelection(options: {
 
   const percent = computed(() => (total.value === 0 ? 0 : Math.round((done.value / total.value) * 100)))
   const progressText = computed(() => `批量重试中 ${done.value}/${total.value}`)
-  /** 状态可重试但缺匹配信息的条数（界面要说明为什么勾不了） */
-  const manualCount = computed(() => needsManualCount(options.records.value))
 
   return {
     checkedKeys,
     running,
     percent,
     progressText,
-    manualCount,
     isSelectable,
     clear,
     toggle,

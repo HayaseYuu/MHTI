@@ -230,23 +230,26 @@ class HistoryScrapeActions:
         conflict_data 里没有保存 locator，但 scrape_jobs 表保留了完整的 locator。
         通过 record.scrape_job_id 查表恢复。
         """
+        saved_context = getattr(record, "ai_folder_context", None)
+        fallback = {"ai_folder_context": saved_context} if saved_context is not None else {}
         if not record.scrape_job_id:
-            return {}
+            return fallback
         try:
             job = await self._scrape_job_service.get_job(record.scrape_job_id)
             if job is None:
-                return {}
+                return fallback
             result = {
                 "file_locator": job.file_locator,
                 "output_locator": job.output_locator,
                 "metadata_locator": job.metadata_locator,
                 "allow_local_output": job.allow_local_output,
                 "advanced_settings": job.advanced_settings or record.advanced_settings,
+                "ai_folder_context": getattr(job, "ai_folder_context", None) or saved_context,
             }
             # 只保留非空值
             return {k: v for k, v in result.items() if v is not None and v is not False}
         except Exception:
-            return {}
+            return fallback
 
     async def execute_scrape_and_update(
         self,
@@ -272,6 +275,9 @@ class HistoryScrapeActions:
         record = await history_service.get_record(record_id)
         if record is not None:
             scrape_request.advanced_settings = record.advanced_settings
+            scrape_request.ai_folder_context = scrape_request.ai_folder_context or getattr(
+                record, "ai_folder_context", None
+            )
         existing_logs = list(record.scrape_logs) if record and record.scrape_logs else []
         manual_job_id = record.manual_job_id if record else None
 
@@ -308,9 +314,25 @@ class HistoryScrapeActions:
         # 先落 running：列表与详情页据此实时显示「正在处理」——重刮/处理都要跑几十秒；
         # started_at 取当下（记录可能创建于几天前，executed_at 不能当本次开始时间用）
         run_started_at = datetime.now()
+        # 单条人工修正覆盖之前的批量选择，防止后续普通重试复活旧版本/旧季集。
+        context = dict(getattr(record, "conflict_data", None) or {})
+        previous_id = context.get("tmdb_id") or getattr(record, "tmdb_id", None)
+        context.pop("batch_selected_id", None)
+        context.pop("match_resolved_id", None)
+        if previous_id != scrape_request.tmdb_id:
+            context.pop("series_info", None)
+            context.pop("search_results", None)
+        context.update(
+            tmdb_id=scrape_request.tmdb_id,
+            parsed_season=scrape_request.season,
+            parsed_episode=scrape_request.episode,
+            season=scrape_request.season,
+            episode=scrape_request.episode,
+        )
         await history_service.update_record(
             record_id,
             status=TaskStatus.RUNNING,
+            conflict_data=context,
             error_message="",
             started_at=run_started_at,
             # 记下本次使用的匹配：用户换过 ID/季/集时记录跟着更新，

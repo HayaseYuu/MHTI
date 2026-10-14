@@ -19,6 +19,7 @@ _SCRAPE_JOBS_DDL = """
         source TEXT NOT NULL DEFAULT 'manual',
         source_id INTEGER,
         advanced_settings TEXT,
+        ai_folder_context TEXT,
         file_locator TEXT,
         output_locator TEXT,
         metadata_locator TEXT,
@@ -42,31 +43,31 @@ class ScrapeJobRepository(BaseRepository):
     async def ensure_schema(self) -> None:
         """兼容旧数据库：补齐缺失列（幂等）。"""
         async with self._connect() as db:
+            migrations = (
+                ("link_mode", "TEXT"),
+                ("advanced_settings", "TEXT"),
+                ("file_locator", "TEXT"),
+                ("output_locator", "TEXT"),
+                ("metadata_locator", "TEXT"),
+                ("allow_local_output", "INTEGER DEFAULT 0"),
+                ("ai_folder_context", "TEXT"),
+            )
+            cursor = await db.execute("PRAGMA table_info(scrape_jobs)")
+            existing_columns = {row[1] for row in await cursor.fetchall()}
+            if all(name in existing_columns for name, _ in migrations):
+                return
+            # 旧库首次并发访问时，串行升级并在锁内重查，避免重复添加列。
+            await db.execute("BEGIN IMMEDIATE")
             try:
-                await db.execute("ALTER TABLE scrape_jobs ADD COLUMN link_mode TEXT")
-            except Exception:
-                pass  # 列已存在
-            try:
-                await db.execute("ALTER TABLE scrape_jobs ADD COLUMN advanced_settings TEXT")
-            except Exception:
-                pass  # 列已存在
-            try:
-                await db.execute("ALTER TABLE scrape_jobs ADD COLUMN file_locator TEXT")
-            except Exception:
-                pass  # 列已存在
-            try:
-                await db.execute("ALTER TABLE scrape_jobs ADD COLUMN output_locator TEXT")
-            except Exception:
-                pass  # 列已存在
-            try:
-                await db.execute("ALTER TABLE scrape_jobs ADD COLUMN metadata_locator TEXT")
-            except Exception:
-                pass  # 列已存在
-            try:
-                await db.execute("ALTER TABLE scrape_jobs ADD COLUMN allow_local_output INTEGER DEFAULT 0")
-            except Exception:
-                pass  # 列已存在
-            await db.commit()
+                cursor = await db.execute("PRAGMA table_info(scrape_jobs)")
+                existing_columns = {row[1] for row in await cursor.fetchall()}
+                for name, declaration in migrations:
+                    if name not in existing_columns:
+                        await db.execute(f"ALTER TABLE scrape_jobs ADD COLUMN {name} {declaration}")
+                await db.commit()
+            except BaseException:
+                await db.rollback()
+                raise
 
     async def get_pending_by_path(self, file_path: str) -> aiosqlite.Row | None:
         """获取指定路径仍在处理中的任务（pending/running/pending_action）。"""
@@ -100,8 +101,8 @@ class ScrapeJobRepository(BaseRepository):
                 INSERT INTO scrape_jobs
                 (id, file_path, output_dir, metadata_dir, link_mode, source, source_id,
                  advanced_settings, file_locator, output_locator, metadata_locator,
-                 allow_local_output, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 allow_local_output, status, created_at, ai_folder_context)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -118,6 +119,7 @@ class ScrapeJobRepository(BaseRepository):
                     1 if data.allow_local_output else 0,
                     ScrapeJobStatus.PENDING.value,
                     created_at,
+                    data.ai_folder_context.model_dump_json() if data.ai_folder_context else None,
                 ),
             )
             await db.commit()
@@ -166,9 +168,7 @@ class ScrapeJobRepository(BaseRepository):
         return list(rows), total
 
     async def get_job_raw(self, job_id: str) -> aiosqlite.Row | None:
-        return await self._fetch_one(
-            "SELECT * FROM scrape_jobs WHERE id = ?", (job_id,)
-        )
+        return await self._fetch_one("SELECT * FROM scrape_jobs WHERE id = ?", (job_id,))
 
     async def update_job(
         self,

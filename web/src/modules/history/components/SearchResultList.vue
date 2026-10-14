@@ -33,6 +33,10 @@ const { getImageUrl, getYear } = useTmdbDisplay()
           v-for="result in results"
           :key="result.id"
           class="result-card clickable"
+          role="button"
+          tabindex="0"
+          @keydown.enter="emit('select', result)"
+          @keydown.space.prevent="emit('select', result)"
           @click="emit('select', result)"
         >
           <div class="poster-wrapper">
@@ -140,8 +144,9 @@ const { getImageUrl, getYear } = useTmdbDisplay()
 
 .info .meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   margin-top: 2px;
 }
 
@@ -155,6 +160,8 @@ const { getImageUrl, getYear } = useTmdbDisplay()
 
 .meta-item {
   display: flex;
+  flex-shrink: 0;
+  white-space: nowrap;
   align-items: center;
   gap: 4px;
   font-size: 12px;

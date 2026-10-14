@@ -77,3 +77,40 @@ class AISuggestion(BaseModel):
         elif self.selected_id is None or self.title is not None:
             raise ValueError("select_candidate requires only selected_id")
         return self
+
+
+class AIFolderContext(BaseModel):
+    """仅向 AI 提供目录名称，不携带路径、存储标识或凭据。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scan_root_name: str | None = None
+    outer_folder_name: str | None = None
+    parent_folder_name: str | None = None
+    folder_names: list[str] = Field(default_factory=list, max_length=4)
+
+    @staticmethod
+    def clean_name(value: str) -> str:
+        """清理控制字符后，仅允许有界的 basename。"""
+        if not isinstance(value, str):
+            raise ValueError("folder name must be a string")
+        name = "".join(
+            char
+            for char in value
+            if not (ord(char) < 32 or 127 <= ord(char) <= 159 or char in "\u2028\u2029")
+        ).strip()
+        if "/" in name or "\\" in name or re.search(r"(?:^[A-Za-z]:|\w+://|www\.)", name, re.I):
+            raise ValueError("folder name must not contain paths or URLs")
+        return "" if name in {"", ".", ".."} else name[:160]
+
+    @field_validator("scan_root_name", "outer_folder_name", "parent_folder_name", mode="before")
+    @classmethod
+    def sanitize_name(cls, value: str | None) -> str | None:
+        return cls.clean_name(value) or None if value is not None else None
+
+    @field_validator("folder_names", mode="before")
+    @classmethod
+    def sanitize_names(cls, value: list[str]) -> list[str]:
+        if not isinstance(value, list):
+            raise ValueError("folder names must be a list")
+        return [name for item in value if (name := cls.clean_name(item))]

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { NPagination, useMessage } from 'naive-ui'
 import { historyApi } from '@/modules/history/api'
@@ -7,10 +7,15 @@ import type {
   HistoryFileDeleteResponse,
   HistoryRecord,
   HistoryRecordDetail,
+  TMDBSearchResult,
 } from '@/modules/history/types'
 import { useHistoryList } from '@/modules/history/hooks/useHistoryList'
 import { useHistoryRealtime } from '@/modules/history/hooks/useHistoryRealtime'
 import { useHistorySelection } from '@/modules/history/hooks/useHistorySelection'
+import { isBatchItemSuccess, runSerialBatch } from '@/modules/history/batchProcessing'
+import { useHistoryBatchGroups } from '@/modules/history/hooks/useHistoryBatchGroups'
+import HistoryDirectoryGroups from '@/modules/history/components/HistoryDirectoryGroups.vue'
+import BatchVersionModal from '@/modules/history/components/BatchVersionModal.vue'
 import { useElapsedClock } from '@/modules/history/hooks/useHistoryElapsed'
 import ResolveConflictModal from '@/modules/history/components/ResolveConflictModal.vue'
 import HistoryBatchBar from '@/modules/history/components/HistoryBatchBar.vue'
@@ -70,16 +75,60 @@ const filesRecord = ref<HistoryRecord | null>(null)
 // 多选批量重试（勾选态 + 进度状态，见 useHistorySelection）
 const {
   checkedKeys,
-  running: batchRunning,
+  running: batchRetryRunning,
   percent: batchPercent,
   progressText: batchProgressText,
-  manualCount: batchManualCount,
-  isSelectable,
+  isSelectable: isRetrySelectable,
   clear: clearSelection,
   toggle: toggleChecked,
   run: runBatchRetry,
   stop: stopBatchRetry,
 } = useHistorySelection({ records, reload: loadRecords })
+const batchResolveRunning = ref(false)
+const batchResolveDone = ref(0)
+const batchResolveTotal = ref(0)
+const stopResolveRequested = ref(false)
+const stopBatch = () => {
+  if (batchResolveRunning.value) stopResolveRequested.value = true
+  else stopBatchRetry()
+}
+const combinedProgressText = computed(() => batchResolveRunning.value ? `批量选择版本中 ${batchResolveDone.value}/${batchResolveTotal.value}` : batchProgressText.value)
+const combinedPercent = computed(() => batchResolveRunning.value ? Math.round(batchResolveDone.value / Math.max(1, batchResolveTotal.value) * 100) : batchPercent.value)
+const batchRunning = computed(() => batchRetryRunning.value || batchResolveRunning.value)
+const isSelectable = (record: HistoryRecord) => !batchResolveRunning.value && isRetrySelectable(record)
+const { groups: directoryGroups, loading: groupsLoading, choosing: choosingVersion, modalGroup, showModal: showBatchVersionModal, selectGroup, chooseVersion } = useHistoryBatchGroups({ records, checkedKeys, running: batchRunning })
+
+const applyBatchVersion = async (selected: TMDBSearchResult) => {
+  const group = modalGroup.value
+  if (!group || batchRunning.value) return
+  batchResolveRunning.value = true
+  batchResolveDone.value = 0
+  batchResolveTotal.value = group.record_ids.length
+  stopResolveRequested.value = false
+  try {
+    const result = await runSerialBatch({
+      ids: [...group.record_ids],
+      shouldStop: () => stopResolveRequested.value,
+      execute: async (id) => {
+        const response = await historyApi.resolveBatch({ record_ids: [id], group_key: group.group_key, tmdb_id: selected.id })
+        return isBatchItemSuccess(response.results.find((item) => item.record_id === id))
+      },
+      onProgress: (done) => { batchResolveDone.value = done },
+      reload: loadRecords,
+    })
+    const summary = `成功 ${result.done - result.failed} 条，${result.failed} 条仍需处理`
+    if (result.stopped) message.info(`已停止，完成 ${result.done}/${group.record_ids.length} 条：${summary}`)
+    else if (result.failed) message.warning(`批量选择版本完成：${summary}，请查看记录详情`)
+    else message.success(`批量处理完成：${result.done} 条成功`)
+    showBatchVersionModal.value = false
+    clearSelection()
+  } finally {
+    batchResolveRunning.value = false
+    stopResolveRequested.value = false
+    try { await loadRecords() } catch { message.warning('刷新失败，请手动刷新查看处理结果') }
+  }
+}
+
 
 // 重刮弹窗（可搜 TMDB 取 ID）：数据先落后端再刷新，因此弹窗提交后即关
 const showRescapeModal = ref(false)
@@ -251,16 +300,24 @@ watch([page, statusFilter], () => {
         <span class="tabular">{{ total }} 条</span>
       </div>
 
+      <HistoryDirectoryGroups
+        :groups="directoryGroups"
+        :loading="groupsLoading"
+        :disabled="batchRunning"
+        @select="selectGroup"
+      />
+
       <!-- 批量操作条：有勾选才出现，紧贴工具栏 -->
       <HistoryBatchBar
         v-if="checkedKeys.length > 0"
         :count="checkedKeys.length"
         :running="batchRunning"
-        :progress-text="batchProgressText"
-        :percent="batchPercent"
-        :manual-count="batchManualCount"
+        :progress-text="combinedProgressText"
+        :percent="combinedPercent"
+        :choosing-version="choosingVersion"
+        @version="chooseVersion"
         @retry="runBatchRetry"
-        @stop="stopBatchRetry"
+        @stop="stopBatch"
         @clear="clearSelection"
       />
 
@@ -329,6 +386,15 @@ watch([page, statusFilter], () => {
         />
       </div>
     </PageContainer>
+
+    <BatchVersionModal
+      v-model:show="showBatchVersionModal"
+      :group="modalGroup"
+      :loading="batchResolveRunning"
+      :progress-text="combinedProgressText"
+      @stop="stopBatch"
+      @submit="applyBatchVersion"
+    />
 
     <!-- 重刮弹窗（可搜 TMDB 取 ID） -->
     <RescapeModal

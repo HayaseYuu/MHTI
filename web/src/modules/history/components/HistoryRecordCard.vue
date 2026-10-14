@@ -34,7 +34,7 @@ defineProps<{
   nowTick: number
   /** 批量重试的勾选态 */
   checked?: boolean
-  /** 是否可勾选（状态可重试且匹配信息齐全） */
+  /** 是否可勾选（待处理、失败或超时，运行期间锁定选择） */
   selectable?: boolean
 }>()
 

@@ -56,7 +56,7 @@ const emit = defineEmits<{
         <span class="switch-label">{{ aiAssist ? '允许 AI 辅助识别' : '禁用 AI 辅助' }}</span>
       </div>
       <template #feedback>
-        <span class="form-hint">仅普通刮削失败或候选有歧义时辅助；全局未启用或未配 Key 时不调用</span>
+        <span class="form-hint">仅普通刮削失败或候选有歧义时辅助；自动结合文件名与文件夹名，不发送完整路径。全局未启用或未配 Key 时不调用</span>
       </template>
     </NFormItem>
 

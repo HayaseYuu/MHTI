@@ -182,6 +182,7 @@ async def _create_job_tables(db: aiosqlite.Connection) -> None:
             source TEXT NOT NULL DEFAULT 'manual',
             source_id INTEGER,
             advanced_settings TEXT,
+            ai_folder_context TEXT,
             file_locator TEXT,
             output_locator TEXT,
             metadata_locator TEXT,

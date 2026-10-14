@@ -117,9 +117,10 @@ onBeforeUnmount(() => { keyInput.value = '' })
       <NInputNumber v-model:value="config.confidence_threshold" :min="0.8" :max="1" :step="0.01" :precision="2" :disabled="saving" :clearable="false" />
     </SettingsField>
     <div class="assist-boundary">
-      <p>AI 只辅助普通刮削：识别番名，或判断现有候选中的哪一个。</p>
+      <p>AI 只辅助普通刮削：结合文件名和文件夹名识别作品，或判断现有候选中的哪一个。</p>
       <p>标题、剧情、图片及季集数据仍由普通数据源获取，AI 不能生成元数据或季集。</p>
-      <p>启用后会向 DeepSeek 发送文件名和有限候选信息，不上传媒体文件；模型请求可能产生费用。保存配置不会调用模型。</p>
+      <p>启用后会向 DeepSeek 发送文件名、扫描根目录名、作品最外层文件夹名、最近父目录名及有限候选信息。目录上下文由后台自动获取，仅发送名称，不发送完整路径、视频、字幕或密钥内容。</p>
+      <p>模型请求可能产生费用；保存配置不会调用模型。API Key 仅用于请求认证，不会写入 AI 提示。</p>
     </div>
     <template #actions>
       <NButton type="primary" :loading="saving" :disabled="loading" @click="save">保存配置</NButton>

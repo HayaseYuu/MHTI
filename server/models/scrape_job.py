@@ -5,6 +5,7 @@ from enum import Enum
 
 from pydantic import BaseModel
 
+from server.models.ai import AIFolderContext
 from server.models.manual_job import ManualJobAdvancedSettings
 from server.models.organize import OrganizeMode
 from server.models.storage import StorageLocator
@@ -42,6 +43,7 @@ class ScrapeJob(BaseModel):
     link_mode: OrganizeMode | None = None  # 整理模式
     source: ScrapeJobSource  # 来源
     source_id: int | None = None  # 来源任务ID (ManualJob.id)
+    ai_folder_context: AIFolderContext | None = None
     advanced_settings: ManualJobAdvancedSettings | None = None  # 高级设置
     status: ScrapeJobStatus = ScrapeJobStatus.PENDING
     created_at: datetime
@@ -64,6 +66,7 @@ class ScrapeJobCreate(BaseModel):
     link_mode: OrganizeMode | None = None  # 整理模式
     source: ScrapeJobSource = ScrapeJobSource.MANUAL
     source_id: int | None = None
+    ai_folder_context: AIFolderContext | None = None
     advanced_settings: ManualJobAdvancedSettings | None = None  # 高级设置
 
 

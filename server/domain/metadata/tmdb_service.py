@@ -546,24 +546,44 @@ class TMDBService:
         if language is None:
             language = await self._get_language()
 
-        try:
-            response = await self._make_api_request(
-                f"/tv/{tmdb_id}/season/{season_number}",
-                params={"language": language},
+        response = await self._make_api_request(
+            f"/tv/{tmdb_id}/season/{season_number}",
+            params={"language": language},
+        )
+        if response.status_code == 404:
+            return None
+        if response.status_code in (401, 403):
+            raise TMDBInvalidCredentialsError("API Token")
+        if response.status_code != 200:
+            error = TMDBError(
+                f"TMDB 季详情请求失败（HTTP {response.status_code}）",
+                ErrorCode.TMDB_RATE_LIMITED if response.status_code == 429
+                else ErrorCode.TMDB_REQUEST_FAILED,
             )
+            if response.status_code == 429:
+                error.status_code = 429
+            raise error
 
-            if response.status_code == 404:
-                return None
-            if response.status_code != 200:
-                return None
-
+        try:
             data = response.json()
+            # 成功响应仍需有可核验的季集结构；畸形数据不能冒充“确实没有该集”。
+            if (
+                not isinstance(data, dict)
+                or type(data.get("season_number")) is not int
+                or data["season_number"] != season_number
+                or not isinstance(data.get("episodes"), list)
+                or any(
+                    not isinstance(episode, dict)
+                    or type(episode.get("episode_number")) is not int
+                    or episode["episode_number"] < 0
+                    for episode in data["episodes"]
+                )
+            ):
+                raise ValueError("invalid season payload")
             return self._parse_season_json(data)
-
-        except ValueError:
-            raise
-        except (httpx.TimeoutException, httpx.RequestError):
-            raise
+        except (ValueError, TypeError, KeyError, AttributeError) as exc:
+            # 不回显响应体/校验明细，避免上游错误内容中的凭据进入日志或界面。
+            raise TMDBError("TMDB 季详情响应格式无效，请稍后重试") from exc
 
     def _parse_season_json(self, data: dict) -> TMDBSeason:
         """Parse season data from API JSON response."""

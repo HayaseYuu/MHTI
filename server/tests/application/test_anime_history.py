@@ -198,12 +198,14 @@ async def test_new_manual_and_scrape_jobs_snapshot_default_anime_mode(temp_db, m
     import aiosqlite
 
     import server.application.manual_job_service as manual_module
+    import server.application.scrape_job_service as scrape_module
     from server.application.manual_job_service import ManualJobService
     from server.application.scrape_job_service import ScrapeJobService
     from server.models.manual_job import ManualJobCreate
     from server.models.scrape_job import ScrapeJobCreate
 
     monkeypatch.setattr(manual_module, "_ensure_worker", lambda: None)
+    monkeypatch.setattr(scrape_module, "_ensure_worker", lambda: None)
     manual_service = ManualJobService(temp_db)
     scrape_service = ScrapeJobService(temp_db)
     manual = await manual_service.create_job(ManualJobCreate(scan_path="/a", target_folder="/b"))

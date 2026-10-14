@@ -208,3 +208,20 @@ export interface HistoryListResponse {
   records: HistoryRecord[]
   total: number
 }
+
+/** 待处理批量操作：分组和候选始终由服务端校验，不凭前端目录显示名猜测。 */
+export interface HistoryBatchGroup {
+  group_key: string
+  folder_name: string
+  record_ids: string[]
+  candidates: TMDBSearchResult[]
+}
+export interface HistoryBatchPreview {
+  groups: HistoryBatchGroup[]
+  ungrouped_ids: string[]
+}
+export interface HistoryBatchResult {
+  results: Array<{ record_id: string; success: boolean; status: TaskStatus; message: string }>
+  success_count: number
+  failed_count: number
+}

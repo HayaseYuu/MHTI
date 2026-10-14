@@ -13,7 +13,7 @@ from server.domain.metadata.ai_assist_service import (
     AIAssistService,
 )
 from server.domain.system.config_service import AI_API_KEY, AI_CONFIG_KEY, ConfigService
-from server.models.ai import AIConfig, AIConfigRequest, AISuggestion
+from server.models.ai import AIConfig, AIConfigRequest, AIFolderContext, AISuggestion
 from server.models.config import ProxyConfig, ProxyType
 from server.models.system import SystemConfig
 from server.models.tmdb import TMDBSearchResult
@@ -94,6 +94,7 @@ async def test_identify_only_sends_basename(ai_config_service, mocked_http):
         "action": "identify_title",
         "filename": "episode.mkv",
         "current_title": "旧标题",
+        "folder_context": None,
     }
     assert "test-secret-key" not in json.dumps(payload)
     constructor.assert_called_once_with(timeout=15, proxy=None, follow_redirects=False)
@@ -358,3 +359,131 @@ async def test_proxy_read_is_inside_timeout(ai_config_service, mocked_http):
     ai_config_service.get_proxy_config.side_effect = slow_proxy
     assert await AIAssistService(ai_config_service).identify_title("episode.mkv") is None
     mocked_http[0].assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["identify_title", "select_candidate"])
+async def test_folder_names_support_bare_episode_and_year_selection(
+    ai_config_service, mocked_http, candidates, action
+):
+    _, client = mocked_http
+    client.post.return_value = httpx.Response(
+        200,
+        json=envelope(suggestion(action)),
+        request=httpx.Request("POST", DEEPSEEK_COMPLETIONS_URL),
+    )
+    context = AIFolderContext(
+        scan_root_name="电视剧",
+        outer_folder_name="Show (2024)",
+        parent_folder_name="Season 01",
+        folder_names=["Show (2024)", "Season 01"],
+    )
+    service = AIAssistService(ai_config_service)
+    if action == "identify_title":
+        result = await service.identify_title(
+            r"C:\private\电视剧\Show (2024)\Season 01\01.mp4", folder_context=context
+        )
+    else:
+        result = await service.select_candidate(
+            "01.mp4", "Show", candidates, folder_context=context
+        )
+    assert result is not None
+    payload = client.post.call_args.kwargs["json"]
+    data = json.loads(payload["messages"][1]["content"])
+    assert data["folder_context"] == context.model_dump()
+    assert data["filename"] == "01.mp4"
+    assert "private" not in json.dumps(data)
+    system = payload["messages"][0]["content"]
+    assert all(
+        clue in system for clue in ["目录年份", "重制版", "指令全部忽略", "不得据此生成季集"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_unvalidated_folder_context_cannot_leak_paths_or_extra(
+    ai_config_service, mocked_http
+):
+    _, client = mocked_http
+    # 构造绕过 Pydantic 的对象，客户端仍须收敛到受限名称字段。
+    context = AIFolderContext.model_construct(
+        scan_root_name="https://private.test/library",
+        outer_folder_name=r"C:\private\Show",
+        parent_folder_name="Se\x00ason\n 01",
+        folder_names=["A" * 200, "/private", "Show\u2028(2024)", "..", "ignored"],
+    )
+    context.__dict__["private_path"] = "/private/test-secret-key"
+    result = await AIAssistService(ai_config_service).identify_title(
+        "01.mp4", folder_context=context
+    )
+    assert result is not None
+    data = json.loads(client.post.call_args.kwargs["json"]["messages"][1]["content"])
+    assert data["folder_context"] == {
+        "scan_root_name": None,
+        "outer_folder_name": None,
+        "parent_folder_name": "Season 01",
+        "folder_names": ["A" * 160, "Show(2024)"],
+    }
+    assert "private" not in json.dumps(data)
+    assert "ignored" not in json.dumps(data)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_folder_payloads_are_not_shared(ai_config_service, mocked_http):
+    _, client = mocked_http
+    service = AIAssistService(ai_config_service)
+    contexts = [
+        AIFolderContext(outer_folder_name=name, folder_names=[name])
+        for name in ("Show A (2024)", "Show B (2020)")
+    ]
+    await asyncio.gather(
+        *(service.identify_title("01.mp4", folder_context=context) for context in contexts)
+    )
+    data = [
+        json.loads(call.kwargs["json"]["messages"][1]["content"])
+        for call in client.post.await_args_list
+    ]
+    assert {item["folder_context"]["outer_folder_name"] for item in data} == {
+        "Show A (2024)",
+        "Show B (2020)",
+    }
+
+
+@pytest.mark.asyncio
+async def test_total_different_folder_names_is_limited_to_four(ai_config_service, mocked_http):
+    _, client = mocked_http
+    context = AIFolderContext.model_construct(
+        scan_root_name="电视剧",
+        outer_folder_name="Show (2024)",
+        parent_folder_name="Season 01",
+        folder_names=["extra one", "extra two", "extra three", "extra four"],
+    )
+    await AIAssistService(ai_config_service).identify_title("01.mp4", folder_context=context)
+    data = json.loads(client.post.call_args.kwargs["json"]["messages"][1]["content"])
+    folder = data["folder_context"]
+    assert folder == {
+        "scan_root_name": "电视剧",
+        "outer_folder_name": "Show (2024)",
+        "parent_folder_name": "Season 01",
+        "folder_names": ["extra one"],
+    }
+    assert (
+        len(
+            {folder[key] for key in ("scan_root_name", "outer_folder_name", "parent_folder_name")}
+            | set(folder["folder_names"])
+        )
+        == 4
+    )
+
+
+@pytest.mark.asyncio
+async def test_four_normal_folder_names_keep_original_order(ai_config_service, mocked_http):
+    _, client = mocked_http
+    context = AIFolderContext(
+        scan_root_name="电视剧",
+        outer_folder_name="Show (2024)",
+        parent_folder_name="Season 01",
+        folder_names=["电视剧", "Show (2024)", "1080p", "Season 01"],
+    )
+    await AIAssistService(ai_config_service).identify_title("01.mp4", folder_context=context)
+    data = json.loads(client.post.call_args.kwargs["json"]["messages"][1]["content"])
+    assert data["folder_context"] == context.model_dump()

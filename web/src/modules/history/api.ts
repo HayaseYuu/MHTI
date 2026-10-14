@@ -1,5 +1,7 @@
 import api from '@/shared/api/client'
 import type {
+  HistoryBatchPreview,
+  HistoryBatchResult,
   HistoryFileDeleteResponse,
   HistoryFileListResponse,
   HistoryFileScope,
@@ -14,6 +16,21 @@ import type {
  * 历史记录相关 API
  */
 export const historyApi = {
+  async previewBatch(recordIds: string[]): Promise<HistoryBatchPreview> {
+    const response = await api.post<HistoryBatchPreview>('/history/batch/preview', { record_ids: recordIds })
+    return response.data
+  },
+
+  async resolveBatch(request: { record_ids: string[]; group_key: string; tmdb_id: number; season?: number }): Promise<HistoryBatchResult> {
+    const response = await api.post<HistoryBatchResult>('/history/batch/resolve', request)
+    return response.data
+  },
+
+  async retryBatch(recordIds: string[]): Promise<HistoryBatchResult> {
+    const response = await api.post<HistoryBatchResult>('/history/batch/retry', { record_ids: recordIds })
+    return response.data
+  },
+
   /**
    * 获取历史记录列表
    */

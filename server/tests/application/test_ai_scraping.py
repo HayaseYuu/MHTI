@@ -1,6 +1,7 @@
 """AI 仅辅助普通刮削的编排边界回归；全部使用本地假服务。"""
 
 import asyncio
+from datetime import date
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call
 
@@ -8,7 +9,8 @@ import httpx
 import pytest
 
 from server.domain.metadata.anilist_service import AniListError
-from server.models.ai import AISuggestion
+from server.domain.metadata.folder_context import build_ai_folder_context
+from server.models.ai import AIFolderContext, AISuggestion
 from server.models.manual_job import ManualJobAdvancedSettings
 from server.models.organize import OrganizeMode
 from server.models.parser import ParsedInfo
@@ -115,7 +117,12 @@ async def test_ambiguous_negative_anilist_id_is_only_advice(case):
     anime.get_series_by_api.assert_awaited_once_with(-7)
     anime.get_season_by_api.assert_awaited_once_with(-7, 1)
     ai.identify_title.assert_not_awaited()
-    ai.select_candidate.assert_awaited_once_with("Test.Show.S01E01.mp4", "Test Show", candidates)
+    ai.select_candidate.assert_awaited_once_with(
+        "Test.Show.S01E01.mp4",
+        "Test Show",
+        candidates,
+        folder_context=build_ai_folder_context(request.file_path),
+    )
     assert any(
         "继续普通刮削核验" in log.message for step in result.scrape_logs for log in step.logs
     )
@@ -164,7 +171,9 @@ async def test_missing_title_ai_preserves_original_season_episode_year(case):
     assert parsed.year == 2021
     assert result.dest_path is None
     anime.search_series_by_api.assert_awaited_once_with("Test Show")
-    ai.identify_title.assert_awaited_once_with("Test.Show.S01E01.mp4", None)
+    ai.identify_title.assert_awaited_once_with(
+        "Test.Show.S01E01.mp4", None, folder_context=build_ai_folder_context(request.file_path)
+    )
     ai.select_candidate.assert_not_awaited()
 
 
@@ -177,7 +186,11 @@ async def test_no_matching_result_researches_corrected_title_once(case):
     assert result.status == ScrapeStatus.SUCCESS
     assert result.parsed_title == "Corrected Show"
     assert anime.search_series_by_api.await_args_list == [call("Test Show"), call("Corrected Show")]
-    ai.identify_title.assert_awaited_once_with("Test.Show.S01E01.mp4", "Test Show")
+    ai.identify_title.assert_awaited_once_with(
+        "Test.Show.S01E01.mp4",
+        "Test Show",
+        folder_context=build_ai_folder_context(request.file_path),
+    )
     ai.select_candidate.assert_not_awaited()
 
 
@@ -436,3 +449,150 @@ async def test_incomplete_search_does_not_trigger_ai(case, count):
     _assert_no_ai(ai)
     if count == 0:
         assert "搜索不完整" in result.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("r18", [False, True])
+async def test_outer_show_folder_disambiguates_bare_episode_and_preserves_verification(
+    case, tmp_path, r18
+):
+    service, adult, anime, ai, request = case
+    source = tmp_path / "电视剧" / "Show (2024)" / "Season 01" / "01.mp4"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"video")
+    request.file_path = str(source)
+    request.advanced_settings = ManualJobAdvancedSettings(r18=r18)
+    request.ai_folder_context = build_ai_folder_context(str(source), str(tmp_path / "电视剧"))
+    service.parser_service = Mock(
+        parse=Mock(
+            return_value=ParsedInfo(
+                original_filename="01.mp4",
+                series_name="Show",
+                season=1,
+                episode=1,
+            )
+        )
+    )
+    provider = adult if r18 else anime
+    selected_id = 123 if r18 else -7
+    candidates = [
+        _candidate(124 if r18 else -8, r18).model_copy(
+            update={
+                "name": "Show",
+                "first_air_date": date(2000, 1, 1),
+            }
+        ),
+        _candidate(selected_id, r18).model_copy(
+            update={
+                "name": "Show",
+                "first_air_date": date(2024, 1, 1),
+            }
+        ),
+    ]
+    provider.search_series_by_api.return_value = _response(*candidates)
+
+    async def choose_by_folder(filename, title, choices, *, folder_context):
+        assert filename == "01.mp4" and title == "Show"
+        assert folder_context.outer_folder_name == "Show (2024)"
+        matches = [
+            choice
+            for choice in choices
+            if str(choice.first_air_date.year) in folder_context.outer_folder_name
+        ]
+        assert len(matches) == 1
+        return _selected(matches[0].id)
+
+    ai.select_candidate.side_effect = choose_by_folder
+    result = await service.scrape_file(request)
+    assert result.status == ScrapeStatus.SUCCESS
+    assert result.selected_id == selected_id
+    context = ai.select_candidate.await_args.kwargs["folder_context"]
+    assert context.scan_root_name == "电视剧"
+    assert context.outer_folder_name == "Show (2024)"
+    assert context.parent_folder_name == "Season 01"
+    assert context.folder_names == ["电视剧", "Show (2024)", "Season 01"]
+    provider.get_series_by_api.assert_awaited_once_with(selected_id)
+    provider.get_season_by_api.assert_awaited_once_with(selected_id, 1)
+    ai.identify_title.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_missing_title_uses_same_folder_context_for_research_and_selection(case):
+    service, _, anime, ai, request = case
+    context = AIFolderContext(
+        scan_root_name="电视剧",
+        outer_folder_name="Show (2024)",
+        parent_folder_name="Season 01",
+        folder_names=["Show (2024)", "Season 01"],
+    )
+    request.ai_folder_context = context
+    service.parser_service = Mock(
+        parse=Mock(
+            return_value=ParsedInfo(
+                original_filename="01.mp4",
+                season=1,
+                episode=1,
+            )
+        )
+    )
+    anime.search_series_by_api.return_value = _response(_candidate(-8), _candidate(-7))
+    ai.identify_title.return_value = _identified("Show")
+    ai.select_candidate.return_value = _selected()
+    result = await service.scrape_file(request)
+    assert result.status == ScrapeStatus.SUCCESS
+    assert ai.identify_title.await_args.kwargs["folder_context"] == context
+    assert ai.select_candidate.await_args.kwargs["folder_context"] == context
+    anime.search_series_by_api.assert_awaited_once_with("Show")
+    assert (result.parsed_season, result.parsed_episode) == (1, 1)
+
+
+@pytest.mark.asyncio
+async def test_different_concurrent_scan_roots_do_not_share_ai_context(case):
+    service, _, anime, ai, request = case
+    anime.search_series_by_api.return_value = _response(_candidate(-8), _candidate(-7))
+    ai.select_candidate.return_value = _selected()
+    service._move_and_finalize = AsyncMock(side_effect=lambda **kw: kw["result"])
+    contexts = [
+        AIFolderContext(scan_root_name=root, outer_folder_name=title, folder_names=[title])
+        for root, title in [("电视剧", "Show (2024)"), ("动漫", "Show (2000)")]
+    ]
+    requests = [request.model_copy(update={"ai_folder_context": context}) for context in contexts]
+    results = await asyncio.gather(*(service.scrape_file(item) for item in requests))
+    assert all(result.status == ScrapeStatus.SUCCESS for result in results)
+    assert {
+        call.kwargs["folder_context"].scan_root_name for call in ai.select_candidate.await_args_list
+    } == {"电视剧", "动漫"}
+    assert {
+        call.kwargs["folder_context"].outer_folder_name
+        for call in ai.select_candidate.await_args_list
+    } == {"Show (2024)", "Show (2000)"}
+
+
+@pytest.mark.asyncio
+async def test_batch_real_scrape_preserves_explicit_folder_context(case):
+    service, _, anime, ai, request = case
+    context = AIFolderContext(
+        scan_root_name="电视剧",
+        outer_folder_name="Show (2024)",
+        parent_folder_name="Season 01",
+        folder_names=["电视剧", "Show (2024)", "Season 01"],
+    )
+    anime.search_series_by_api.return_value = _response(_candidate(-8), _candidate(-7))
+    ai.select_candidate.return_value = _selected()
+    # 实际运行 batch→scrape_file→选择→普通核验，仅跳过输出以免重复整理测试文件。
+    service._move_and_finalize = AsyncMock(side_effect=lambda **kw: kw["result"])
+    result = await service.batch_scrape(
+        BatchScrapeRequest(
+            file_paths=[request.file_path, request.file_path],
+            output_dir=request.output_dir,
+            dry_run=False,
+            ai_folder_context=context,
+        )
+    )
+    assert result.success == 2
+    assert ai.select_candidate.await_count == 2
+    assert all(
+        call.kwargs["folder_context"] == context for call in ai.select_candidate.await_args_list
+    )
+    assert anime.get_series_by_api.await_count == 2
+    assert anime.get_season_by_api.await_count == 2

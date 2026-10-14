@@ -39,7 +39,7 @@ const props = defineProps<{
   nowTick: number
   /** 已勾选的记录 id（批量重试用） */
   checkedKeys?: string[]
-  /** 该行是否可勾选（状态可重试且匹配信息齐全） */
+  /** 该行是否可勾选（待处理、失败或超时，运行期间锁定选择） */
   selectable?: (record: HistoryRecord) => boolean
 }>()
 
@@ -75,7 +75,7 @@ const columns = computed<DataTableColumns<HistoryRecord>>(() => {
   const nowMs = props.nowTick
   return [
     {
-      // 批量重试的勾选列：只有状态可重试且匹配信息齐全的行可选
+      // 批量重试的勾选列：只有待处理、失败或超时，运行期间锁定选择的行可选
       type: 'selection',
       width: 40,
       disabled: (row) => !(props.selectable?.(row) ?? false),

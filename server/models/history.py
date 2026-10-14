@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from server.models.ai import AIFolderContext
 from server.models.manual_job import ManualJobAdvancedSettings
 
 
@@ -88,6 +89,7 @@ class HistoryRecord(BaseModel):
     manual_job_id: int | None = None
     scrape_job_id: str | None = None  # 关联的刮削任务ID
     title: str | None = None
+    ai_folder_context: AIFolderContext | None = None
     advanced_settings: ManualJobAdvancedSettings | None = None
     metadata_source: Literal["tmdb", "anilist"] = "tmdb"
     anilist_id: int | None = None

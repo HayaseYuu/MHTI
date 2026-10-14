@@ -19,7 +19,7 @@ FROM python:3.12-slim AS runtime
 
 LABEL org.opencontainers.image.title="MHTI"
 LABEL org.opencontainers.image.description="Anime metadata scraper with TMDB and AniList integration"
-LABEL org.opencontainers.image.version="1.1.0"
+LABEL org.opencontainers.image.version="1.1.1"
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

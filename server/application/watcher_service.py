@@ -10,9 +10,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from watchdog.events import FileCreatedEvent, FileMovedEvent, FileSystemEventHandler
 from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler, FileCreatedEvent, FileMovedEvent
 
+from server.domain.metadata.folder_context import build_ai_folder_context
 from server.infrastructure.db import DATABASE_PATH
 from server.infrastructure.repositories.watcher_repository import WatcherRepository
 from server.models.watcher import (
@@ -537,7 +538,6 @@ class WatcherService:
     async def get_status(self) -> WatcherStatusResponse:
         """Get watcher status."""
         folders, _ = await self.list_folders()
-        active = sum(1 for f in folders if f.enabled)
 
         return WatcherStatusResponse(
             status=self._status,
@@ -860,6 +860,9 @@ class WatcherService:
                 output_locator=output_locator,
                 link_mode=link_mode,  # 传递整理模式
                 source=ScrapeJobSource.WATCHER,
+                ai_folder_context=build_ai_folder_context(
+                    file.path, folder.path if folder else None
+                ),
             )
             await scrape_service.create_job(job_create)
 

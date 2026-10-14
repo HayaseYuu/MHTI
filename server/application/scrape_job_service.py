@@ -12,6 +12,7 @@ from server.domain.media.fingerprint_service import calculate_fingerprint
 from server.infrastructure.db import DATABASE_PATH
 from server.infrastructure.realtime import get_notifier
 from server.infrastructure.repositories.scrape_job_repository import ScrapeJobRepository
+from server.models.ai import AIFolderContext
 from server.models.manual_job import ManualJobAdvancedSettings
 from server.models.organize import OrganizeMode
 from server.models.scrape_job import (
@@ -205,6 +206,7 @@ class ScrapeJobService:
             source=job.source,
             source_id=job.source_id,
             advanced_settings=job.advanced_settings,
+            ai_folder_context=job.ai_folder_context,
             status=ScrapeJobStatus.PENDING,
             created_at=now,
         )
@@ -301,6 +303,15 @@ class ScrapeJobService:
             row["allow_local_output"] if "allow_local_output" in row.keys() else 0
         )
 
+        context_json = row["ai_folder_context"] if "ai_folder_context" in row.keys() else None
+        ai_folder_context = None
+        if context_json:
+            try:
+                ai_folder_context = AIFolderContext.model_validate_json(context_json)
+            except (TypeError, ValueError):
+                # 辅助信息损坏不能阻断普通刮削，也不回显未经验证的目录内容。
+                logger.warning("任务目录上下文无效，将回退到最近父目录")
+
         return ScrapeJob(
             id=row["id"],
             file_path=row["file_path"],
@@ -314,6 +325,7 @@ class ScrapeJobService:
             source=ScrapeJobSource(row["source"]),
             source_id=row["source_id"],
             advanced_settings=advanced_settings,
+            ai_folder_context=ai_folder_context,
             status=ScrapeJobStatus(row["status"]),
             created_at=datetime.fromisoformat(row["created_at"]),
             started_at=datetime.fromisoformat(row["started_at"]) if row["started_at"] else None,
@@ -450,9 +462,12 @@ async def _execute_scrape_job(service: ScrapeJobService, job_id: str) -> None:
             manual_job_id=job.source_id if job.source == ScrapeJobSource.MANUAL else None,
             file_fingerprint=file_fingerprint,
             conflict_data={
+                "ai_folder_context": (
+                    job.ai_folder_context.model_dump(mode="json") if job.ai_folder_context else None
+                ),
                 "advanced_settings": (
                     job.advanced_settings or ManualJobAdvancedSettings()
-                ).model_dump()
+                ).model_dump(),
             },
         )
     )
@@ -493,6 +508,7 @@ async def _execute_scrape_job(service: ScrapeJobService, job_id: str) -> None:
             link_mode=job.link_mode,
             auto_select=True,
             advanced_settings=job.advanced_settings,
+            ai_folder_context=job.ai_folder_context,
         )
         # 使用超时控制
         result = await asyncio.wait_for(
@@ -538,6 +554,11 @@ async def _execute_scrape_job(service: ScrapeJobService, job_id: str) -> None:
                 record_id,
                 tmdb_id=result.selected_id,
                 conflict_data={
+                    "ai_folder_context": (
+                        job.ai_folder_context.model_dump(mode="json")
+                        if job.ai_folder_context
+                        else None
+                    ),
                     "advanced_settings": (
                         job.advanced_settings or ManualJobAdvancedSettings()
                     ).model_dump(),
@@ -579,6 +600,9 @@ async def _execute_scrape_job(service: ScrapeJobService, job_id: str) -> None:
         elif result.status == ScrapeStatus.NEED_SELECTION:
             # 需要用户选择
             conflict_data = {
+                "ai_folder_context": (
+                    job.ai_folder_context.model_dump(mode="json") if job.ai_folder_context else None
+                ),
                 "advanced_settings": (
                     job.advanced_settings or ManualJobAdvancedSettings()
                 ).model_dump(),
@@ -610,6 +634,9 @@ async def _execute_scrape_job(service: ScrapeJobService, job_id: str) -> None:
         elif result.status == ScrapeStatus.NEED_SEASON_EPISODE:
             # 需要输入季集
             conflict_data = {
+                "ai_folder_context": (
+                    job.ai_folder_context.model_dump(mode="json") if job.ai_folder_context else None
+                ),
                 "advanced_settings": (
                     job.advanced_settings or ManualJobAdvancedSettings()
                 ).model_dump(),
@@ -640,6 +667,9 @@ async def _execute_scrape_job(service: ScrapeJobService, job_id: str) -> None:
         elif result.status == ScrapeStatus.FILE_CONFLICT:
             # 文件冲突
             conflict_data = {
+                "ai_folder_context": (
+                    job.ai_folder_context.model_dump(mode="json") if job.ai_folder_context else None
+                ),
                 "advanced_settings": (
                     job.advanced_settings or ManualJobAdvancedSettings()
                 ).model_dump(),
@@ -679,12 +709,18 @@ async def _execute_scrape_job(service: ScrapeJobService, job_id: str) -> None:
                 ScrapeStatus.API_FAILED: HistoryConflictType.API_FAILED,
             }
             conflict_data = {
+                "ai_folder_context": (
+                    job.ai_folder_context.model_dump(mode="json") if job.ai_folder_context else None
+                ),
                 "advanced_settings": (
                     job.advanced_settings or ManualJobAdvancedSettings()
                 ).model_dump(),
                 "output_dir": job.output_dir,
                 "metadata_dir": job.metadata_dir,
                 "link_mode": job.link_mode.value if job.link_mode else None,
+                "tmdb_id": result.selected_id,
+                "series_info": result.series_info.model_dump(mode="json")
+                if result.series_info else None,
                 "parsed_title": result.parsed_title,
                 "parsed_season": result.parsed_season,
                 "parsed_episode": result.parsed_episode,
@@ -694,6 +730,9 @@ async def _execute_scrape_job(service: ScrapeJobService, job_id: str) -> None:
                 status=TaskStatus.PENDING_ACTION,
                 error_message=result.message,
                 conflict_type=conflict_type_map[result.status],
+                tmdb_id=result.selected_id,
+                season_number=result.parsed_season,
+                episode_number=result.parsed_episode,
                 conflict_data=conflict_data,
                 duration_seconds=elapsed_seconds(),
             )
@@ -708,6 +747,9 @@ async def _execute_scrape_job(service: ScrapeJobService, job_id: str) -> None:
         elif result.status == ScrapeStatus.EMBY_CONFLICT:
             # Emby 冲突
             conflict_data = {
+                "ai_folder_context": (
+                    job.ai_folder_context.model_dump(mode="json") if job.ai_folder_context else None
+                ),
                 "advanced_settings": (
                     job.advanced_settings or ManualJobAdvancedSettings()
                 ).model_dump(),

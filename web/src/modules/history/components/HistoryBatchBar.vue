@@ -13,11 +13,11 @@ defineProps<{
   progressText: string
   /** 进度百分比（0-100） */
   percent: number
-  /** 状态可重试但缺匹配信息的条数（勾选框禁用，需说明原因） */
-  manualCount: number
+  choosingVersion?: boolean
 }>()
 
 defineEmits<{
+  version: []
   retry: []
   stop: []
   clear: []
@@ -28,9 +28,7 @@ defineEmits<{
   <div class="batch-bar" role="group" aria-label="批量操作">
     <span class="batch-count">已选 {{ count }} 条</span>
 
-    <span v-if="manualCount > 0 && !running" class="batch-note">
-      {{ manualCount }} 条缺少匹配信息，需逐条处理
-    </span>
+    <span v-if="!running" class="batch-note">重试会重新请求数据，不额外强制覆盖文件</span>
     <span v-if="running" class="batch-progress">{{ progressText }}</span>
     <NProgress
       v-if="running"
@@ -44,6 +42,7 @@ defineEmits<{
 
     <div class="batch-actions">
       <NButton size="small" quaternary :disabled="running" @click="$emit('clear')">取消选择</NButton>
+      <NButton v-if="!running" size="small" :loading="choosingVersion" @click="$emit('version')">选择版本</NButton>
       <NButton v-if="running" size="small" @click="$emit('stop')">停止</NButton>
       <NButton v-else size="small" type="primary" @click="$emit('retry')">批量重试</NButton>
     </div>

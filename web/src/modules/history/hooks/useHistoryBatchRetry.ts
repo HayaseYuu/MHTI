@@ -2,126 +2,79 @@ import { computed, ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import { historyApi } from '@/modules/history/api'
 import type { HistoryRecord } from '@/modules/history/types'
-import { getRetryMatch } from '@/modules/history/utils'
+import {
+  isBatchItemSuccess,
+  runSerialBatch,
+} from '@/modules/history/batchProcessing'
 
-/**
- * 批量重试（列表页多选后用）
- *
- * 串行逐条：TMDB 有速率限制、多条同时搬运文件还会互相抢目录，所以一条跑完再跑下一条
- * （后端 retry 接口本身是同步执行完才返回的）。
- *
- * 只提交「匹配三件套齐全」的记录：确认不了 TMDB ID/季/集就没有可重试的参数，
- * 弹窗问用户又失去了批量的意义，因此计入 skipped 并在结束时说明，绝不猜一个 ID 去跑。
- */
+/** 普通刮削重试不要求已有 ID / 季 / 集，API 临时失败也可直接重新尝试。 */
 export function useHistoryBatchRetry(options: {
-  /** 当前页记录（用于把 id 还原成记录取匹配参数） */
   records: () => HistoryRecord[]
-  /** 每次重试后刷新列表（实时状态由 WebSocket 推送，这里只兜底终态） */
   reload: () => Promise<void> | void
-  /** 清空选中 */
   clearSelection: () => void
 }) {
   const message = useMessage()
-
   const running = ref(false)
   const done = ref(0)
   const total = ref(0)
-  const failed = ref(0)
-  const skipped = ref(0)
-  /** 用户点了「停止」：当前这条跑完就不再往下发 */
   const stopRequested = ref(false)
-
-  /** 状态上允许批量重试（与列表行的「处理」按钮同一套判定） */
-  const canRetry = (record: HistoryRecord) =>
-    record.status === 'timeout' || record.status === 'failed' || record.status === 'pending_action'
-
-  /** 可勾选：状态可重试且缺匹配信息就无法批量跑 */
-  const isSelectable = (record: HistoryRecord) => canRetry(record) && getRetryMatch(record) !== null
-
-  /** 状态可重试但缺匹配信息（勾选框禁用，界面要说明原因） */
-  const needsManualCount = (records: HistoryRecord[]) => records.filter((r) => canRetry(r) && !isSelectable(r)).length
-
-  const progressText = computed(() => (running.value ? `批量重试中 ${done.value}/${total.value}` : ''))
-
+  const isSelectable = (record: HistoryRecord) =>
+    ['timeout', 'failed', 'pending_action'].includes(record.status) &&
+    !running.value
+  const progressText = computed(() => `批量重试中 ${done.value}/${total.value}`)
   const stop = () => {
     stopRequested.value = true
   }
 
-  /** 串行重试选中记录，返回是否跑完（被停止时为 false） */
   const run = async (ids: string[]) => {
-    const byId = new Map(options.records().map((record) => [record.id, record]))
-    const targets: Array<{ record: HistoryRecord; tmdbId: number; season: number; episode: number }> = []
-    let missing = 0
-
-    for (const id of ids) {
-      const record = byId.get(id)
-      if (!record) continue
-      const match = getRetryMatch(record)
-      if (!match) {
-        missing += 1
-        continue
-      }
-      targets.push({ record, ...match })
+    if (running.value) return false
+    const records = new Map(
+      options.records().map((record) => [record.id, record]),
+    )
+    const targets = [...new Set(ids)].filter((id) => {
+      const record = records.get(id)
+      return record && isSelectable(record)
+    })
+    if (!targets.length) {
+      message.warning('请选择待处理、失败或超时的记录')
+      return false
     }
-
-    // 一条都跑不了就别进入「运行中」，否则进度条一闪而过反而像出了错
-    if (targets.length === 0) {
-      message.warning('选中的记录都缺少匹配信息，需要逐条处理')
-      return true
-    }
-    if (missing > 0) {
-      message.info(`${missing} 条缺少匹配信息，本次跳过，需要逐条处理`)
-    }
-
     running.value = true
     stopRequested.value = false
     done.value = 0
     total.value = targets.length
-    failed.value = 0
-    skipped.value = missing
-
-    let stopped = false
-    for (const target of targets) {
-      if (stopRequested.value) {
-        stopped = true
-        break
+    try {
+      const result = await runSerialBatch({
+        ids: targets,
+        shouldStop: () => stopRequested.value,
+        execute: async (id) => {
+          const response = await historyApi.retryBatch([id])
+          return isBatchItemSuccess(
+            response.results.find((item) => item.record_id === id),
+          )
+        },
+        onProgress: (completed) => {
+          done.value = completed
+        },
+        reload: options.reload,
+      })
+      if (result.stopped) {
+        message.info(
+          `已停止：完成 ${result.done}/${targets.length} 条，成功 ${result.done - result.failed} 条，未成功 ${result.failed} 条`,
+        )
+      } else if (result.failed) {
+        message.warning(
+          `批量重试完成：成功 ${result.done - result.failed} 条，${result.failed} 条仍需处理或重试`,
+        )
+      } else {
+        message.success(`批量重试完成：${result.done} 条成功`)
       }
-      try {
-        await historyApi.retryRecord(target.record.id, {
-          tmdb_id: target.tmdbId,
-          season: target.season,
-          episode: target.episode,
-        })
-      } catch (error) {
-        failed.value += 1
-        console.error(error)
-      }
-      done.value += 1
-      await options.reload()
+      return !result.stopped
+    } finally {
+      running.value = false
+      stopRequested.value = false
+      options.clearSelection()
     }
-
-    running.value = false
-    stopRequested.value = false
-    options.clearSelection()
-
-    if (stopped) {
-      message.info(`已停止，完成 ${done.value}/${total.value} 条`)
-    } else if (failed.value > 0) {
-      message.warning(`批量重试完成：成功 ${done.value - failed.value} 条，失败 ${failed.value} 条`)
-    } else {
-      message.success(`批量重试完成：${done.value} 条`)
-    }
-    return !stopped
   }
-
-  return {
-    running,
-    done,
-    total,
-    progressText,
-    isSelectable,
-    needsManualCount,
-    run,
-    stop,
-  }
+  return { running, done, total, progressText, isSelectable, run, stop }
 }

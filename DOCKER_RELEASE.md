@@ -1,16 +1,16 @@
-# 1.1.0 Docker 镜像部署
+# 1.1.1 Docker 镜像部署
 
-正式发布页：<https://github.com/HayaseYuu/MHTI/releases/tag/v1.1.0>
+正式发布页：<https://github.com/HayaseYuu/MHTI/releases/tag/v1.1.1>
 
 ## 下载
 
 按部署主机的 CPU 架构选择：
 
-- Intel / AMD（x86_64）：`mhti-1.1.0-amd64.tar.gz`
-- Apple Silicon / ARM64：`mhti-1.1.0-arm64.tar.gz`
+- Intel / AMD（x86_64）：`mhti-1.1.1-amd64.tar.gz`
+- Apple Silicon / ARM64：`mhti-1.1.1-arm64.tar.gz`
 - 同时下载 `SHA256SUMS.txt`。
 
-两个镜像均从已发布的 `v1.1.0` 标签构建，不移动版本标签。
+两个镜像均从已发布的 `v1.1.1` 标签构建，不移动版本标签。
 内置 Caddy、前端、后端及所有运行依赖，无需 Docker Hub 登录。
 
 ## 校验、加载、启动
@@ -22,7 +22,7 @@
 sha256sum -c SHA256SUMS.txt --ignore-missing
 # macOS 可以使用 shasum -a 256 文件名，与 SHA256SUMS 对比。
 
-gzip -dc mhti-1.1.0-amd64.tar.gz | docker load
+gzip -dc mhti-1.1.1-amd64.tar.gz | docker load
 
 docker run -d --name mhti \
   --restart unless-stopped \
@@ -30,7 +30,7 @@ docker run -d --name mhti \
   -v "$PWD/data:/app/data" \
   -v /path/to/media:/media \
   -e TZ=Asia/Shanghai \
-  mhti:1.1.0
+  mhti:1.1.1
 ```
 
 浏览器访问 `http://你的主机:8000`，首次启动创建管理员账号。
@@ -41,12 +41,12 @@ docker run -d --name mhti \
 ## 可选 Compose
 
 原项目 Compose 指向 `xiyan520/mhti:latest`，那不是本增强版镜像。
-加载本版本后，请使用下面的配置或将原 Compose 的 image 改为 `mhti:1.1.0`。
+加载本版本后，请使用下面的配置或将原 Compose 的 image 改为 `mhti:1.1.1`。
 
 ```yaml
 services:
   mhti:
-    image: mhti:1.1.0
+    image: mhti:1.1.1
     pull_policy: never
     container_name: mhti
     restart: unless-stopped

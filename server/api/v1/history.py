@@ -3,21 +3,25 @@
 import asyncio
 import json
 
-from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from server.application.history_actions import HistoryScrapeActions
-from server.application.history_files import HistoryFileService
-from server.api.deps import require_auth
 from server.api.deps import (
     get_config_service,
     get_history_service,
     get_manual_job_service,
-    get_scraped_file_service,
     get_scrape_job_service,
+    get_scraped_file_service,
+    require_auth,
 )
+from server.application.history_actions import HistoryScrapeActions
+from server.application.history_batch_actions import HistoryBatchActions
+from server.application.history_files import HistoryFileService
+from server.application.history_service import HistoryService
+from server.application.manual_job_service import ManualJobService
+from server.application.scrape_job_service import ScrapeJobService
 from server.application.scraped_file_service import ScrapedFileService
 from server.domain.system.config_service import ConfigService
 from server.models.history import (
@@ -25,18 +29,21 @@ from server.models.history import (
     HistoryFileDeleteRequest,
     HistoryFileDeleteResponse,
     HistoryFileListResponse,
+    HistoryListResponse,
     HistoryRecord,
     HistoryRecordCreate,
     HistoryRecordDetail,
-    HistoryListResponse,
     TaskStatus,
     UndoResponse,
 )
+from server.models.history_batch import (
+    HistoryBatchPreview,
+    HistoryBatchRequest,
+    HistoryBatchResolveRequest,
+    HistoryBatchResponse,
+)
 from server.models.organize import OrganizeMode
 from server.models.scraper import ScrapeByIdRequest
-from server.application.history_service import HistoryService
-from server.application.manual_job_service import ManualJobService
-from server.application.scrape_job_service import ScrapeJobService
 
 router = APIRouter(prefix="/api/history", tags=["history"], dependencies=[Depends(require_auth)])
 
@@ -213,6 +220,39 @@ def get_history_scrape_actions(
 ) -> HistoryScrapeActions:
     """构造历史刮削用例（依赖经 FastAPI 覆盖链注入）。"""
     return HistoryScrapeActions(history_service, scrape_job_service, scraped_file_service, files)
+
+
+def get_history_batch_actions(
+    history_service: HistoryService = Depends(get_history_service),
+    scrape_job_service: ScrapeJobService = Depends(get_scrape_job_service),
+    manual_job_service: ManualJobService = Depends(get_manual_job_service),
+    actions: HistoryScrapeActions = Depends(get_history_scrape_actions),
+) -> HistoryBatchActions:
+    return HistoryBatchActions(history_service, scrape_job_service, manual_job_service, actions)
+
+
+@router.post("/batch/preview", response_model=HistoryBatchPreview)
+async def preview_batch(
+    request: HistoryBatchRequest,
+    actions: HistoryBatchActions = Depends(get_history_batch_actions),
+) -> HistoryBatchPreview:
+    return await actions.preview(request.record_ids)
+
+
+@router.post("/batch/resolve", response_model=HistoryBatchResponse)
+async def resolve_batch(
+    request: HistoryBatchResolveRequest,
+    actions: HistoryBatchActions = Depends(get_history_batch_actions),
+) -> HistoryBatchResponse:
+    return await actions.resolve(request)
+
+
+@router.post("/batch/retry", response_model=HistoryBatchResponse)
+async def retry_batch(
+    request: HistoryBatchRequest,
+    actions: HistoryBatchActions = Depends(get_history_batch_actions),
+) -> HistoryBatchResponse:
+    return await actions.retry(request.record_ids)
 
 
 def _build_scrape_request(

@@ -4,6 +4,7 @@ import asyncio
 import csv
 import io
 import json
+import logging
 import uuid
 from datetime import datetime
 from enum import Enum
@@ -14,6 +15,7 @@ from server.infrastructure.db import DATABASE_PATH
 from server.infrastructure.realtime import get_notifier
 from server.infrastructure.repositories.history_repository import HistoryRepository
 from server.infrastructure.repositories.scraped_file_repository import ScrapedFileRepository
+from server.models.ai import AIFolderContext
 from server.models.history import (
     HistoryConflictType,
     HistoryRecord,
@@ -25,6 +27,8 @@ from server.models.history import (
     UndoResponse,
 )
 from server.models.manual_job import ManualJobAdvancedSettings
+
+logger = logging.getLogger(__name__)
 
 # 内存日志缓存：record_id -> list[ScrapeLogStep]
 _log_cache: dict[str, list[ScrapeLogStep]] = {}
@@ -122,7 +126,14 @@ def _metadata_context(row) -> dict:
         advanced_settings = ManualJobAdvancedSettings(**settings)
     except (TypeError, ValueError):
         advanced_settings = ManualJobAdvancedSettings(r18=True)
+    folder_context = None
+    if context.get("ai_folder_context") is not None:
+        try:
+            folder_context = AIFolderContext.model_validate(context["ai_folder_context"])
+        except (TypeError, ValueError):
+            pass
     return {
+        "ai_folder_context": folder_context,
         "advanced_settings": advanced_settings,
         "metadata_source": "anilist" if internal_id and internal_id < 0 else "tmdb",
         "anilist_id": anilist_id,
@@ -399,6 +410,32 @@ class HistoryService:
             await notifier.notify_history_detail_update(record_id, update_data)
 
         return updated
+
+    async def claim_for_retry(self, record_id: str, allowed_statuses: set[TaskStatus]) -> bool:
+        """领取待重试记录；取消时只释放本次已提交的领取，不遗留运行态。"""
+        await self._ensure_db()
+        started_at = datetime.now()
+        claim_task = asyncio.create_task(self._repo.claim_for_retry(
+            record_id, allowed_statuses, started_at=started_at
+        ))
+        try:
+            # SQLite 提交不能中途取消后丢失领取结果，否则无法判断记录归属。
+            claimed = await asyncio.shield(claim_task)
+            if claimed:
+                update = build_record_update_payload(
+                    status=TaskStatus.RUNNING, started_at=started_at, error_message=""
+                )
+                try:
+                    notifier = get_notifier()
+                    await notifier.notify_history_updated(record_id, update)
+                    await notifier.notify_history_detail_update(record_id, update)
+                except Exception:
+                    logger.warning("批量领取状态推送失败，继续执行已领取记录 %s", record_id)
+            return claimed
+        except asyncio.CancelledError:
+            if await claim_task:
+                await self._repo.release_cancelled_retry(record_id, started_at=started_at)
+            raise
 
     async def clear_records(self, before_days: int | None = None) -> int:
         """Clear history records and associated scrape jobs."""

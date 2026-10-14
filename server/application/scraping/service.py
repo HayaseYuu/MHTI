@@ -28,6 +28,7 @@ from server.domain.integration.emby_service import EmbyService
 from server.domain.metadata.ai_assist_service import AIAssistService
 from server.domain.metadata.anilist_service import AniListError
 from server.domain.metadata.anime_metadata_service import AnimeMetadataService
+from server.domain.metadata.folder_context import build_ai_folder_context
 from server.domain.metadata.tmdb_service import TMDBService
 from server.domain.parsing.parser_service import ParserService
 from server.domain.system.config_service import ConfigService
@@ -161,6 +162,19 @@ class ScraperService:
 
     def _get_season_nfo_data(self, series: TMDBSeries, season_num: int) -> SeasonNFO:
         return self._metadata_resolver.get_season_nfo_data(series, season_num)
+
+    @staticmethod
+    def _mark_season_api_failed(
+        result: ScrapeResult, step: ScrapeLogStep, scrape_logs: list[ScrapeLogStep]
+    ) -> None:
+        """请求失败不等于缺季集；保留匹配信息供重试，不回显异常中的路径或密钥。"""
+        message = "获取季度详情失败，暂无法核验季/集，请稍后重试"
+        logger.warning(message)
+        step.logs.append(ScrapeLogEntry(message=message, level=ScrapeLogLevel.ERROR))
+        step.completed = False
+        result.status = ScrapeStatus.API_FAILED
+        result.message = message
+        result.scrape_logs = scrape_logs
 
     # ---- 图片/字幕/Emby（转发到 ScraperMediaPipeline，保持原方法面）----
 
@@ -686,6 +700,9 @@ class ScraperService:
                 await on_match_resolved(result.selected_id, season, episode)
 
         # 每文件独立预算，避免并发任务共享标题、候选和重试状态。
+        folder_context = request.ai_folder_context or build_ai_folder_context(
+            request.file_locator.path if request.file_locator else file_path
+        )
         ai_calls = 0
         title_attempted = False
         ai_allowed = request.auto_select and (
@@ -707,14 +724,19 @@ class ScraperService:
                 # AI 配置读取失败也不能中断普通刮削。
                 return None
             ai_calls += 1
-            ai_step = ScrapeLogStep(name="AI 辅助识别", logs=[])
+            ai_step = ScrapeLogStep(
+                name="AI 辅助识别",
+                logs=[ScrapeLogEntry(message="结合文件名与受限目录名称辅助识别，不发送完整路径")],
+            )
             scrape_logs.append(ai_step)
             try:
                 if action == "identify_title":
-                    suggestion = await self.ai_assist_service.identify_title(path.name, title)
+                    suggestion = await self.ai_assist_service.identify_title(
+                        path.name, title, folder_context=folder_context
+                    )
                 else:
                     suggestion = await self.ai_assist_service.select_candidate(
-                        path.name, title or "", candidates or []
+                        path.name, title or "", candidates or [], folder_context=folder_context
                     )
                 # 全 schema 复验；即使注入的客户端绕过字段校验，也不能提升权限。
                 if suggestion is not None:
@@ -969,21 +991,29 @@ class ScraperService:
                 # 多集需要手动选择，先获取季详情
                 result.series_info = series
                 season_num = parsed.season if parsed.season is not None else 1
+                result.parsed_season = season_num
                 try:
                     season_detail = await provider.get_season_by_api(
                         result.selected_id, season_num
                     )
                     # 更新 series 中对应季的 episodes 信息
-                    for i, s in enumerate(series.seasons):
-                        if s.season_number == season_num:
-                            series.seasons[i] = season_detail
-                            break
+                    if season_detail is not None:
+                        for i, s in enumerate(series.seasons):
+                            if s.season_number == season_num:
+                                series.seasons[i] = season_detail
+                                break
                     result.series_info = series
-                except Exception as e:
-                    logger.warning(f"获取季度详情失败: {e}")
+                except Exception:
+                    self._mark_season_api_failed(result, detail_step, scrape_logs)
+                    await notify_log_update()
+                    return result
 
                 result.status = ScrapeStatus.NEED_SEASON_EPISODE
-                result.message = f"剧集共 {total_episodes} 集，请手动选择"
+                result.message = (
+                    "剧集集数未知，请手动选择"
+                    if series.number_of_episodes is None
+                    else f"剧集共 {total_episodes} 集，请手动选择"
+                )
                 result.scrape_logs = scrape_logs
                 return result
 
@@ -993,6 +1023,9 @@ class ScraperService:
 
         # 根据 TMDB 实际季数自动修正季号（单季/双季自动回退，多季交用户选）
         season_num, season_correction = self._auto_correct_season(season_num, series)
+        # 网络故障时仍保留原生流程已选出的 ID/季集，便于重试但不视为核验通过。
+        result.parsed_season = season_num
+        result.parsed_episode = episode_num
 
         # 记录程序选择的季/集
         select_step = ScrapeLogStep(name="确定季/集", logs=[])
@@ -1017,8 +1050,10 @@ class ScraperService:
                 result.selected_id, season_num
             )
             logger.info(f"获取季度详情: Season {season_num}, 共 {len(season_info.episodes) if season_info and season_info.episodes else 0} 集")
-        except Exception as e:
-            logger.warning(f"获取季度详情失败: {e}")
+        except Exception:
+            self._mark_season_api_failed(result, detail_step, scrape_logs)
+            await notify_log_update()
+            return result
 
         # Step 5.2: 核验 TMDB 中是否存在该季和该集
         # 若不存在则暂停为 pending_action，避免文件被错误重命名/移动
@@ -1225,8 +1260,10 @@ class ScraperService:
             )
             detail_step.logs.append(ScrapeLogEntry(message=f"获取季度详情: 共 {len(season_info.episodes) if season_info and season_info.episodes else 0} 集"))
             await notify_log_update()
-        except Exception as e:
-            logger.warning(f"获取季度详情失败: {e}")
+        except Exception:
+            self._mark_season_api_failed(result, detail_step, scrape_logs)
+            await notify_log_update()
+            return result
 
         # 核验 TMDB 中是否存在该季和该集（scrape_by_id 路径）
         season_exists = any(s.season_number == request.season for s in series.seasons)
@@ -1422,6 +1459,7 @@ class ScraperService:
                     output_dir=request.output_dir,
                     auto_select=request.auto_select,
                     advanced_settings=request.advanced_settings,
+                    ai_folder_context=request.ai_folder_context,
                 )
                 result = await self.scrape_file(scrape_request)
                 results.append(result)

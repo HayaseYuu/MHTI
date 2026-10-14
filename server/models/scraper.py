@@ -4,6 +4,7 @@ from enum import Enum
 
 from pydantic import BaseModel
 
+from server.models.ai import AIFolderContext
 from server.models.emby import ConflictCheckResult
 from server.models.history import ScrapeLogStep
 from server.models.manual_job import ManualJobAdvancedSettings
@@ -39,6 +40,7 @@ class ScrapeRequest(BaseModel):
     allow_local_output: bool = False
     link_mode: OrganizeMode | None = None  # 整理模式
     auto_select: bool = True  # 自动选择最佳匹配
+    ai_folder_context: AIFolderContext | None = None
     advanced_settings: ManualJobAdvancedSettings | None = None  # 高级设置
 
 
@@ -57,6 +59,7 @@ class ScrapeByIdRequest(BaseModel):
     allow_local_output: bool = False
     link_mode: OrganizeMode | None = None  # 整理模式
     skip_emby_check: bool = False  # 跳过 Emby 冲突检查
+    ai_folder_context: AIFolderContext | None = None
     advanced_settings: ManualJobAdvancedSettings | None = None  # 高级设置
 
 
@@ -92,6 +95,7 @@ class BatchScrapeRequest(BaseModel):
     output_dir: str | None = None
     auto_select: bool = True
     dry_run: bool = False  # 预览模式，不实际执行
+    ai_folder_context: AIFolderContext | None = None
     advanced_settings: ManualJobAdvancedSettings | None = None
 
 

@@ -6,6 +6,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+from server.domain.metadata.folder_context import build_ai_folder_context
 from server.infrastructure.db import DATABASE_PATH
 from server.infrastructure.repositories.manual_job_repository import ManualJobRepository
 from server.models.manual_job import (
@@ -319,6 +320,15 @@ async def _execute_job(service: ManualJobService, job_id: int) -> None:
             )
             return
 
+        # 单文件没有目录扫描根，只参考最近两层，避免 Season 目录盖掉作品名。
+        context_root = (
+            job.scan_locator.path if job.scan_locator and job.scan_locator.path else job.scan_path
+        )
+        if (job.scan_locator and not job.scan_locator.is_dir) or (
+            not is_p115_source and scan_path.is_file()
+        ):
+            context_root = None
+
         # 为每个文件创建刮削任务
         scrape_service = ScrapeJobService()
         organize_mode = _link_mode_to_organize_mode(job.link_mode)
@@ -349,6 +359,7 @@ async def _execute_job(service: ManualJobService, job_id: int) -> None:
                 source=ScrapeJobSource.MANUAL,
                 source_id=job_id,
                 advanced_settings=job.advanced_settings,
+                ai_folder_context=build_ai_folder_context(file_path, context_root),
             )
             created = await scrape_service.create_job(job_create)
             if created is not None:

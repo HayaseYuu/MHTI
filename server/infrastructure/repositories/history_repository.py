@@ -320,6 +320,35 @@ class HistoryRepository(BaseRepository):
             )
             await db.commit()
 
+    async def claim_for_retry(
+        self, record_id: str, allowed_statuses: set[TaskStatus], *, started_at: datetime
+    ) -> bool:
+        """以条件更新原子领取记录，避免多个批量请求同时整理同一文件。"""
+        eligible = allowed_statuses & {
+            TaskStatus.PENDING_ACTION, TaskStatus.FAILED, TaskStatus.TIMEOUT
+        }
+        if not eligible:
+            return False
+        values = sorted(status.value for status in eligible)
+        placeholders = ",".join("?" for _ in values)
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "UPDATE history_records SET status = ?, started_at = ?, error_message = '' "
+                f"WHERE id = ? AND status IN ({placeholders})",
+                (TaskStatus.RUNNING.value, started_at.isoformat(), record_id, *values),
+            )
+            await db.commit()
+            return cursor.rowcount == 1
+
+    async def release_cancelled_retry(self, record_id: str, *, started_at: datetime) -> bool:
+        """只释放本次领取，不能覆盖其它执行者后来写入的状态。"""
+        return bool(await self._execute(
+            "UPDATE history_records SET status = ?, error_message = ? "
+            "WHERE id = ? AND status = ? AND started_at = ?",
+            (TaskStatus.FAILED.value, "批量操作已中断，可重新重试", record_id,
+             TaskStatus.RUNNING.value, started_at.isoformat()),
+        ))
+
     async def update_fields(
         self,
         record_id: str,
