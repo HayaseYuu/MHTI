@@ -145,10 +145,10 @@ jobs:
           ### Docker 镜像下载与加载
 
           本发布已包含 **AMD64** 和 **ARM64** 原生构建、启动验收通过的 Docker 镜像。
-          镜像从标签 `$RELEASE_TAG` 的源码构建，镜像名称为 `mhti:$VERSION`，无需 Docker Hub 登录。
+          镜像从标签 \`$RELEASE_TAG\` 的源码构建，镜像名称为 \`mhti:$VERSION\`，无需 Docker Hub 登录。
 
-          - Intel / AMD：`mhti-$VERSION-amd64.tar.gz`
-          - Apple Silicon / ARM64：`mhti-$VERSION-arm64.tar.gz`
+          - Intel / AMD：\`mhti-$VERSION-amd64.tar.gz\`
+          - Apple Silicon / ARM64：\`mhti-$VERSION-arm64.tar.gz\`
 
           选择与你部署主机对应的架构包，校验后加载：
 
